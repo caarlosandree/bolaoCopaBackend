@@ -42,6 +42,28 @@ func (r *UserRepository) FindByEmail(ctx context.Context, email string) (*models
 	return &u, nil
 }
 
+func (r *UserRepository) ListAll(ctx context.Context) ([]models.User, error) {
+	rows, err := r.DB.QueryContext(ctx,
+		`SELECT id, name, email, role, total_points, created_at
+		 FROM users
+		 ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []models.User
+	for rows.Next() {
+		var u models.User
+		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.TotalPoints, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
 func (r *UserRepository) GetRanking(ctx context.Context) ([]models.Ranking, error) {
 	rows, err := r.DB.QueryContext(ctx,
 		`SELECT id, name, email, total_points

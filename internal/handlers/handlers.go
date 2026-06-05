@@ -142,6 +142,17 @@ func (h *RoundHandler) GetActiveRound(c *echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{"round": round, "matches": matches})
 }
 
+func (h *RoundHandler) ListAll(c *echo.Context) error {
+	rounds, err := h.Rounds.ListAll(c.Request().Context())
+	if err != nil {
+		return respond.InternalError(c, "erro ao buscar rodadas")
+	}
+	if rounds == nil {
+		rounds = []models.Round{}
+	}
+	return c.JSON(http.StatusOK, rounds)
+}
+
 // ==========================================
 // 3. GUESS HANDLER
 // ==========================================
@@ -224,10 +235,11 @@ type AdminHandler struct {
 	Matches *repositories.MatchRepository
 	Score   *services.MatchScoreService
 	Audit   *audit.Service
+	Users   *repositories.UserRepository
 }
 
-func NewAdminHandler(guesses *repositories.GuessRepository, matches *repositories.MatchRepository, score *services.MatchScoreService, auditSvc *audit.Service) *AdminHandler {
-	return &AdminHandler{Guesses: guesses, Matches: matches, Score: score, Audit: auditSvc}
+func NewAdminHandler(guesses *repositories.GuessRepository, matches *repositories.MatchRepository, score *services.MatchScoreService, auditSvc *audit.Service, users *repositories.UserRepository) *AdminHandler {
+	return &AdminHandler{Guesses: guesses, Matches: matches, Score: score, Audit: auditSvc, Users: users}
 }
 
 type updateScoreRequest struct {
@@ -282,6 +294,17 @@ func (h *AdminHandler) UpdateMatchScore(c *echo.Context) error {
 		"match_id": matchID,
 		"score":    map[string]int{"home": req.HomeScore, "away": req.AwayScore},
 	})
+}
+
+func (h *AdminHandler) GetUsers(c *echo.Context) error {
+	users, err := h.Users.ListAll(c.Request().Context())
+	if err != nil {
+		return respond.InternalError(c, "erro ao buscar usuários")
+	}
+	if users == nil {
+		users = []models.User{}
+	}
+	return c.JSON(http.StatusOK, users)
 }
 
 // ==========================================

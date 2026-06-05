@@ -61,7 +61,7 @@ func main() {
 	roundH := handlers.NewRoundHandler(roundRepo)
 	guessH := handlers.NewGuessHandler(guessRepo, matchRepo)
 	rankH := handlers.NewRankingHandler(userRepo)
-	adminH := handlers.NewAdminHandler(guessRepo, matchRepo, scoreSvc, auditSvc)
+	adminH := handlers.NewAdminHandler(guessRepo, matchRepo, scoreSvc, auditSvc, userRepo)
 
 	matchSync := services.NewMatchSyncService(database, matchRepo, scoreSvc, logger, cfg.OpenFootballURL, cfg.WorldCup26BaseURL)
 	syncH := handlers.NewSyncHandler(matchSync, matchRepo)
@@ -125,6 +125,8 @@ func main() {
 	admin := api.Group("/admin")
 	admin.Use(jwtmw.JWTAuth(cfg.JWTSecret))
 	admin.Use(jwtmw.AdminOnly)
+	admin.GET("/users", adminH.GetUsers)
+	admin.GET("/rounds", roundH.ListAll)
 	admin.POST("/matches/:id/score", adminH.UpdateMatchScore)
 	admin.POST("/sync/schedule", syncH.SyncSchedule)
 	admin.POST("/sync/results", syncH.SyncResults)

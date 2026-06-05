@@ -27,6 +27,28 @@ func (r *RoundRepository) FindActive(ctx context.Context) (*models.Round, error)
 	return &round, nil
 }
 
+func (r *RoundRepository) ListAll(ctx context.Context) ([]models.Round, error) {
+	rows, err := r.DB.QueryContext(ctx,
+		`SELECT id, tournament_id, number, name, status, created_at
+		 FROM rounds
+		 ORDER BY number ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var rounds []models.Round
+	for rows.Next() {
+		var round models.Round
+		if err := rows.Scan(&round.ID, &round.TournamentID, &round.Number, &round.Name, &round.Status, &round.CreatedAt); err != nil {
+			return nil, err
+		}
+		rounds = append(rounds, round)
+	}
+	return rounds, rows.Err()
+}
+
 func (r *RoundRepository) FindMatchesByRound(ctx context.Context, roundID, userID int) ([]models.Match, error) {
 	rows, err := r.DB.QueryContext(ctx,
 		`SELECT m.id, m.round_id, m.home_team, m.away_team,
