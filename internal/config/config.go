@@ -31,8 +31,6 @@ type Config struct {
 	TheSportsDBBaseURL           string
 	TheSportsDBLeagueID          string
 	TheSportsDBSeason            string
-	OddsAPIKey                   string
-	OddsAPIBaseURL               string
 	MatchDetailsSyncEnabled      bool
 	MatchDetailsDailyHours       int
 	MatchDetailsLineupMinutes    int
@@ -64,8 +62,6 @@ func Load() (*Config, error) {
 	cfg.TheSportsDBBaseURL = strings.TrimRight(getenvDefault("THESPORTSDB_BASE_URL", "https://www.thesportsdb.com/api/v2/json"), "/")
 	cfg.TheSportsDBLeagueID = getenvDefault("THESPORTSDB_WORLD_CUP_LEAGUE_ID", "4429")
 	cfg.TheSportsDBSeason = getenvDefault("THESPORTSDB_WORLD_CUP_SEASON", "2026")
-	cfg.OddsAPIKey = os.Getenv("ODDS_API_KEY")
-	cfg.OddsAPIBaseURL = strings.TrimRight(getenvDefault("ODDS_API_BASE_URL", "https://api.odds-api.io/v3"), "/")
 	cfg.MatchDetailsSyncEnabled = getenvBoolDefault("MATCH_DETAILS_SYNC_ENABLED", true)
 	cfg.MatchDetailsDailyHours = getenvIntDefault("MATCH_DETAILS_DAILY_INTERVAL_HOURS", 24)
 	cfg.MatchDetailsLineupMinutes = getenvIntDefault("MATCH_DETAILS_LINEUP_REFRESH_MINUTES", 90)

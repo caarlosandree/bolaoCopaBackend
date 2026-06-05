@@ -19,7 +19,6 @@ func NewMatchDetailsRepository(db *sql.DB) *MatchDetailsRepository {
 
 type MatchDetailsUpsert struct {
 	MatchID       int
-	Odds          json.RawMessage
 	Predictions   json.RawMessage
 	RecentForm    json.RawMessage
 	HeadToHead    json.RawMessage
@@ -35,7 +34,7 @@ type MatchDetailsUpsert struct {
 
 func (r *MatchDetailsRepository) FindByMatchID(ctx context.Context, matchID int) (*models.MatchDetails, error) {
 	row := r.DB.QueryRowContext(ctx,
-		`SELECT match_id, odds, predictions, recent_form, head_to_head, lineups,
+		`SELECT match_id, predictions, recent_form, head_to_head, lineups,
 		        statistics, injuries, events, media, source_status, last_synced_at,
 		        lineups_synced_at, updated_at
 		 FROM match_details
@@ -52,14 +51,13 @@ func (r *MatchDetailsRepository) Upsert(ctx context.Context, d MatchDetailsUpser
 	}
 	_, err = r.DB.ExecContext(ctx,
 		`INSERT INTO match_details (
-		    match_id, odds, predictions, recent_form, head_to_head, lineups,
+		    match_id, predictions, recent_form, head_to_head, lineups,
 		    statistics, injuries, events, media, source_status, last_synced_at,
 		    lineups_synced_at, updated_at
 		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
 		 ON CONFLICT (match_id)
 		 DO UPDATE SET
-		    odds = COALESCE(EXCLUDED.odds, match_details.odds),
 		    predictions = COALESCE(EXCLUDED.predictions, match_details.predictions),
 		    recent_form = COALESCE(EXCLUDED.recent_form, match_details.recent_form),
 		    head_to_head = COALESCE(EXCLUDED.head_to_head, match_details.head_to_head),
@@ -73,7 +71,6 @@ func (r *MatchDetailsRepository) Upsert(ctx context.Context, d MatchDetailsUpser
 		    lineups_synced_at = COALESCE(EXCLUDED.lineups_synced_at, match_details.lineups_synced_at),
 		    updated_at = CURRENT_TIMESTAMP`,
 		d.MatchID,
-		nullJSON(d.Odds),
 		nullJSON(d.Predictions),
 		nullJSON(d.RecentForm),
 		nullJSON(d.HeadToHead),
@@ -95,10 +92,9 @@ type rowScanner interface {
 
 func scanMatchDetails(row rowScanner) (*models.MatchDetails, error) {
 	var d models.MatchDetails
-	var odds, predictions, form, h2h, lineups, stats, injuries, events, media, sourceStatus sql.NullString
+	var predictions, form, h2h, lineups, stats, injuries, events, media, sourceStatus sql.NullString
 	err := row.Scan(
 		&d.MatchID,
-		&odds,
 		&predictions,
 		&form,
 		&h2h,
@@ -115,7 +111,6 @@ func scanMatchDetails(row rowScanner) (*models.MatchDetails, error) {
 	if err != nil {
 		return nil, err
 	}
-	d.Odds = rawIfValid(odds)
 	d.Predictions = rawIfValid(predictions)
 	d.RecentForm = rawIfValid(form)
 	d.HeadToHead = rawIfValid(h2h)

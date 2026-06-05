@@ -216,17 +216,6 @@ func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx
 	return matchID, nil
 }
 
-func (r *MatchRepository) UpdateOddsAPIEventID(ctx context.Context, matchID int, oddsEventID string) error {
-	_, err := r.DB.ExecContext(ctx,
-		`UPDATE matches
-		 SET odds_api_event_id = $1, updated_at = CURRENT_TIMESTAMP
-		 WHERE id = $2 AND (odds_api_event_id IS NULL OR odds_api_event_id = $1)`,
-		oddsEventID,
-		matchID,
-	)
-	return err
-}
-
 type DetailsSyncMatch struct {
 	ID                   int
 	HomeTeam             string
@@ -236,7 +225,6 @@ type DetailsSyncMatch struct {
 	TheSportsDBEventID   *string
 	TheSportsDBHomeID    *string
 	TheSportsDBAwayID    *string
-	OddsAPIEventID       *string
 	APIFootballFixtureID *string
 }
 
@@ -244,7 +232,7 @@ func (r *MatchRepository) ListForDetailsSync(ctx context.Context) ([]DetailsSync
 	rows, err := r.DB.QueryContext(ctx,
 		`SELECT id, home_team, away_team, status, match_time,
 		        thesportsdb_event_id, thesportsdb_home_team_id, thesportsdb_away_team_id,
-		        odds_api_event_id, api_football_fixture_id
+		        api_football_fixture_id
 		 FROM matches
 		 ORDER BY match_time ASC`,
 	)
@@ -256,7 +244,7 @@ func (r *MatchRepository) ListForDetailsSync(ctx context.Context) ([]DetailsSync
 	var matches []DetailsSyncMatch
 	for rows.Next() {
 		var m DetailsSyncMatch
-		var eventID, homeID, awayID, oddsID, apiFootballID sql.NullString
+		var eventID, homeID, awayID, apiFootballID sql.NullString
 		if err := rows.Scan(
 			&m.ID,
 			&m.HomeTeam,
@@ -266,7 +254,6 @@ func (r *MatchRepository) ListForDetailsSync(ctx context.Context) ([]DetailsSync
 			&eventID,
 			&homeID,
 			&awayID,
-			&oddsID,
 			&apiFootballID,
 		); err != nil {
 			return nil, err
@@ -274,7 +261,6 @@ func (r *MatchRepository) ListForDetailsSync(ctx context.Context) ([]DetailsSync
 		m.TheSportsDBEventID = stringPtrIfValid(eventID)
 		m.TheSportsDBHomeID = stringPtrIfValid(homeID)
 		m.TheSportsDBAwayID = stringPtrIfValid(awayID)
-		m.OddsAPIEventID = stringPtrIfValid(oddsID)
 		m.APIFootballFixtureID = stringPtrIfValid(apiFootballID)
 		matches = append(matches, m)
 	}

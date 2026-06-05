@@ -15,7 +15,6 @@ type SourceStatus struct {
 
 type MatchDetails struct {
 	MatchID       int             `json:"match_id"`
-	Odds          json.RawMessage `json:"odds,omitempty"`
 	Predictions   json.RawMessage `json:"predictions,omitempty"`
 	RecentForm    json.RawMessage `json:"recent_form,omitempty"`
 	HeadToHead    json.RawMessage `json:"head_to_head,omitempty"`
@@ -31,7 +30,6 @@ type MatchDetails struct {
 }
 
 type MatchDetailsAvailability struct {
-	Odds        bool `json:"odds"`
 	Predictions bool `json:"predictions"`
 	Form        bool `json:"form"`
 	H2H         bool `json:"h2h"`
@@ -45,7 +43,6 @@ type MatchDetailsAvailability struct {
 type MatchDetailsResponse struct {
 	MatchID       int                      `json:"match_id"`
 	Availability  MatchDetailsAvailability `json:"availability"`
-	Odds          json.RawMessage          `json:"odds"`
 	Predictions   json.RawMessage          `json:"predictions"`
 	RecentForm    json.RawMessage          `json:"recent_form"`
 	HeadToHead    json.RawMessage          `json:"head_to_head"`
@@ -64,7 +61,6 @@ func (d MatchDetails) Response() MatchDetailsResponse {
 	return MatchDetailsResponse{
 		MatchID: d.MatchID,
 		Availability: MatchDetailsAvailability{
-			Odds:        hasJSON(d.Odds),
 			Predictions: hasJSON(d.Predictions),
 			Form:        hasJSON(d.RecentForm),
 			H2H:         hasJSON(d.HeadToHead),
@@ -74,7 +70,6 @@ func (d MatchDetails) Response() MatchDetailsResponse {
 			Events:      hasJSON(d.Events),
 			Media:       hasJSON(d.Media),
 		},
-		Odds:          nullableJSON(d.Odds),
 		Predictions:   nullableJSON(d.Predictions),
 		RecentForm:    nullableJSON(d.RecentForm),
 		HeadToHead:    nullableJSON(d.HeadToHead),

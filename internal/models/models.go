@@ -62,7 +62,6 @@ type Match struct {
 	TheSportsDBEventID *string    `json:"thesportsdb_event_id,omitempty" db:"thesportsdb_event_id"`
 	TheSportsDBHomeID  *string    `json:"thesportsdb_home_team_id,omitempty" db:"thesportsdb_home_team_id"`
 	TheSportsDBAwayID  *string    `json:"thesportsdb_away_team_id,omitempty" db:"thesportsdb_away_team_id"`
-	OddsAPIEventID     *string    `json:"odds_api_event_id,omitempty" db:"odds_api_event_id"`
 	APIFootballID      *string    `json:"api_football_fixture_id,omitempty" db:"api_football_fixture_id"`
 	CreatedAt          time.Time  `json:"created_at" db:"created_at"`
 	UserGuess          *UserGuess `json:"user_guess,omitempty"` // Vinculado dinamicamente para exibição

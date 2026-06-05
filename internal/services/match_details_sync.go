@@ -19,7 +19,6 @@ type MatchDetailsSyncService struct {
 	Matches       *repositories.MatchRepository
 	Details       *repositories.MatchDetailsRepository
 	TheSportsDB   *TheSportsDBClient
-	Odds          *OddsAPIClient
 	Logger        *slog.Logger
 	LeagueID      string
 	Season        string
@@ -30,7 +29,6 @@ type MatchDetailsSyncService struct {
 type MatchDetailsSyncSummary struct {
 	ScheduleImported int      `json:"schedule_imported"`
 	DetailsUpdated   int      `json:"details_updated"`
-	OddsLinked       int      `json:"odds_linked"`
 	Failures         []string `json:"failures"`
 }
 
@@ -39,7 +37,6 @@ func NewMatchDetailsSyncService(
 	matches *repositories.MatchRepository,
 	details *repositories.MatchDetailsRepository,
 	theSportsDB *TheSportsDBClient,
-	odds *OddsAPIClient,
 	logger *slog.Logger,
 	leagueID string,
 	season string,
@@ -51,7 +48,6 @@ func NewMatchDetailsSyncService(
 		Matches:       matches,
 		Details:       details,
 		TheSportsDB:   theSportsDB,
-		Odds:          odds,
 		Logger:        logger,
 		LeagueID:      leagueID,
 		Season:        season,
@@ -86,7 +82,6 @@ func (s *MatchDetailsSyncService) runLogged(ctx context.Context) {
 		"sync de detalhes das partidas concluído",
 		"schedule_imported", summary.ScheduleImported,
 		"details_updated", summary.DetailsUpdated,
-		"odds_linked", summary.OddsLinked,
 		"failures", len(summary.Failures),
 	)
 }
@@ -99,13 +94,6 @@ func (s *MatchDetailsSyncService) SyncAll(ctx context.Context) (MatchDetailsSync
 		summary.Failures = append(summary.Failures, "thesportsdb schedule: "+err.Error())
 	} else {
 		summary.ScheduleImported = imported
-	}
-
-	linked, err := s.LinkOddsEvents(ctx)
-	if err != nil {
-		summary.Failures = append(summary.Failures, "odds events: "+err.Error())
-	} else {
-		summary.OddsLinked = linked
 	}
 
 	updated, failures, err := s.SyncStoredMatchDetails(ctx, false)
@@ -176,38 +164,6 @@ func (s *MatchDetailsSyncService) SyncSchedule(ctx context.Context) (int, error)
 	return imported, nil
 }
 
-func (s *MatchDetailsSyncService) LinkOddsEvents(ctx context.Context) (int, error) {
-	events, err := s.Odds.ListFootballEvents(ctx)
-	if err != nil {
-		return 0, err
-	}
-	matches, err := s.Matches.ListForDetailsSync(ctx)
-	if err != nil {
-		return 0, err
-	}
-	linked := 0
-	for _, match := range matches {
-		if match.OddsAPIEventID != nil {
-			continue
-		}
-		for _, event := range events {
-			if !sameTeams(match.HomeTeam, match.AwayTeam, event.Home, event.Away) {
-				continue
-			}
-			eventTime, err := time.Parse(time.RFC3339, event.Date)
-			if err != nil || absDuration(eventTime.Sub(match.MatchTime)) > 6*time.Hour {
-				continue
-			}
-			if err := s.Matches.UpdateOddsAPIEventID(ctx, match.ID, event.IDString()); err != nil {
-				return linked, err
-			}
-			linked++
-			break
-		}
-	}
-	return linked, nil
-}
-
 func (s *MatchDetailsSyncService) SyncStoredMatchDetails(ctx context.Context, force bool) (int, []string, error) {
 	matches, err := s.Matches.ListForDetailsSync(ctx)
 	if err != nil {
@@ -244,7 +200,7 @@ func (s *MatchDetailsSyncService) SyncMatchByID(ctx context.Context, matchID int
 func (s *MatchDetailsSyncService) SyncMatchDetails(ctx context.Context, match repositories.DetailsSyncMatch) error {
 	now := time.Now().UTC()
 	statuses := []models.SourceStatus{}
-	var media, lineups, stats, events, form, odds json.RawMessage
+	var media, lineups, stats, events, form json.RawMessage
 
 	if match.TheSportsDBEventID != nil {
 		eventRaw, err := s.TheSportsDB.LookupEventRaw(ctx, *match.TheSportsDBEventID)
@@ -293,21 +249,12 @@ func (s *MatchDetailsSyncService) SyncMatchDetails(ctx context.Context, match re
 		form, _ = json.Marshal(formPayload)
 	}
 
-	if match.OddsAPIEventID != nil {
-		raw, err := s.Odds.EventOddsRaw(ctx, *match.OddsAPIEventID)
-		statuses = append(statuses, sourceStatus("odds_api", "odds", err, hasJSON(raw), now))
-		if err == nil && hasJSON(raw) {
-			odds = raw
-		}
-	}
-
 	var lineupSynced *time.Time
 	if len(lineups) > 0 {
 		lineupSynced = &now
 	}
 	return s.Details.Upsert(ctx, repositories.MatchDetailsUpsert{
 		MatchID:       match.ID,
-		Odds:          odds,
 		RecentForm:    form,
 		Lineups:       lineups,
 		Statistics:    stats,

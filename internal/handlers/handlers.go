@@ -443,14 +443,12 @@ func (h *SyncHandler) SyncMatchDetails(c *echo.Context) error {
 	h.recordSyncAudit(c, "admin.sync.match_details", http.StatusOK, map[string]any{
 		"schedule_imported": summary.ScheduleImported,
 		"details_updated":   summary.DetailsUpdated,
-		"odds_linked":       summary.OddsLinked,
 		"failures":          len(summary.Failures),
 	})
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":           "detalhes das partidas sincronizados",
 		"schedule_imported": summary.ScheduleImported,
 		"details_updated":   summary.DetailsUpdated,
-		"odds_linked":       summary.OddsLinked,
 		"failures":          summary.Failures,
 	})
 }
@@ -493,7 +491,6 @@ func (h *SyncHandler) ResetSchedule(c *echo.Context) error {
 			detailsSummary = map[string]any{
 				"schedule_imported": summary.ScheduleImported,
 				"details_updated":   summary.DetailsUpdated,
-				"odds_linked":       summary.OddsLinked,
 				"failures":          len(summary.Failures),
 			}
 		}
@@ -583,7 +580,6 @@ func (h *MatchDetailsHandler) GetByMatchID(c *echo.Context) error {
 			return c.JSON(http.StatusOK, map[string]any{
 				"match_id": matchID,
 				"availability": map[string]bool{
-					"odds":        false,
 					"predictions": false,
 					"form":        false,
 					"h2h":         false,
@@ -593,7 +589,6 @@ func (h *MatchDetailsHandler) GetByMatchID(c *echo.Context) error {
 					"events":      false,
 					"media":       false,
 				},
-				"odds":              nil,
 				"predictions":       nil,
 				"recent_form":       nil,
 				"head_to_head":      nil,
