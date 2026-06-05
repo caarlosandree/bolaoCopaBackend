@@ -73,6 +73,22 @@ func (s *MatchSyncService) Sync(ctx context.Context) (MatchSyncSummary, error) {
 	return summary, nil
 }
 
+func (s *MatchSyncService) SyncSchedule(ctx context.Context) (int, error) {
+	return s.importOpenFootball(ctx)
+}
+
+func (s *MatchSyncService) SyncResults(ctx context.Context) (MatchSyncSummary, error) {
+	result, err := s.updateFromWorldCup26(ctx)
+	if err != nil {
+		return MatchSyncSummary{}, err
+	}
+	return MatchSyncSummary{
+		Linked:        result.Linked,
+		ScoresUpdated: result.ScoresUpdated,
+		ScoresSkipped: result.ScoresSkipped,
+	}, nil
+}
+
 func (s *MatchSyncService) Start(ctx context.Context, retryInterval, resultCheckAfter time.Duration) {
 	go func() {
 		s.runLoggedScheduleImport(ctx)

@@ -113,6 +113,7 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 		 )
 		 VALUES ($1, $2, $3, $4, 'scheduled', $5, $6, $7, $8, $9, $10)
 		 ON CONFLICT (external_source, external_id)
+		 WHERE external_source IS NOT NULL AND external_id IS NOT NULL
 		 DO UPDATE SET
 		    round_id = EXCLUDED.round_id,
 		    home_team = EXCLUDED.home_team,
@@ -214,6 +215,61 @@ func (r *MatchRepository) LinkWorldCup26Match(ctx context.Context, tx *sql.Tx, m
 		matchID,
 	)
 	return err
+}
+
+type RecentMatch struct {
+	ID        int       `json:"id"`
+	HomeTeam  string    `json:"home_team"`
+	AwayTeam  string    `json:"away_team"`
+	HomeScore *int      `json:"home_score"`
+	AwayScore *int      `json:"away_score"`
+	Status    string    `json:"status"`
+	MatchTime time.Time `json:"match_time"`
+	RoundName string    `json:"round_name"`
+	GroupName *string   `json:"group_name"`
+}
+
+func (r *MatchRepository) ListRecent(ctx context.Context, limit int) ([]RecentMatch, error) {
+	rows, err := r.DB.QueryContext(ctx,
+		`SELECT m.id, m.home_team, m.away_team, m.home_score, m.away_score, m.status,
+		        m.match_time, r.name AS round_name, m.group_name
+		 FROM matches m
+		 JOIN rounds r ON r.id = m.round_id
+		 ORDER BY m.match_time DESC
+		 LIMIT $1`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var matches []RecentMatch
+	for rows.Next() {
+		var m RecentMatch
+		var homeScore, awayScore sql.NullInt32
+		var groupName sql.NullString
+		if err := rows.Scan(
+			&m.ID, &m.HomeTeam, &m.AwayTeam,
+			&homeScore, &awayScore,
+			&m.Status, &m.MatchTime, &m.RoundName, &groupName,
+		); err != nil {
+			return nil, err
+		}
+		if homeScore.Valid {
+			v := int(homeScore.Int32)
+			m.HomeScore = &v
+		}
+		if awayScore.Valid {
+			v := int(awayScore.Int32)
+			m.AwayScore = &v
+		}
+		if groupName.Valid {
+			m.GroupName = &groupName.String
+		}
+		matches = append(matches, m)
+	}
+	return matches, rows.Err()
 }
 
 func (r *MatchRepository) FindByIDForUpdate(ctx context.Context, tx *sql.Tx, matchID int) (*models.Match, error) {

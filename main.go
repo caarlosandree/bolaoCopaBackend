@@ -63,8 +63,10 @@ func main() {
 	rankH := handlers.NewRankingHandler(userRepo)
 	adminH := handlers.NewAdminHandler(guessRepo, matchRepo, scoreSvc, auditSvc)
 
+	matchSync := services.NewMatchSyncService(database, matchRepo, scoreSvc, logger, cfg.OpenFootballURL, cfg.WorldCup26BaseURL)
+	syncH := handlers.NewSyncHandler(matchSync, matchRepo)
+
 	if cfg.MatchSyncEnabled {
-		matchSync := services.NewMatchSyncService(database, matchRepo, scoreSvc, logger, cfg.OpenFootballURL, cfg.WorldCup26BaseURL)
 		matchSync.Start(
 			context.Background(),
 			time.Duration(cfg.MatchResultRetryMinutes)*time.Minute,
@@ -124,6 +126,9 @@ func main() {
 	admin.Use(jwtmw.JWTAuth(cfg.JWTSecret))
 	admin.Use(jwtmw.AdminOnly)
 	admin.POST("/matches/:id/score", adminH.UpdateMatchScore)
+	admin.POST("/sync/schedule", syncH.SyncSchedule)
+	admin.POST("/sync/results", syncH.SyncResults)
+	admin.GET("/matches/recent", syncH.ListRecentMatches)
 
 	if err := e.Start(":1323"); err != nil {
 		logger.Error("servidor encerrado", "error", err)

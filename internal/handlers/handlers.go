@@ -181,8 +181,8 @@ func (h *GuessHandler) SaveGuess(c *echo.Context) error {
 		return respond.Error(c, http.StatusForbidden, "partida já em andamento ou finalizada")
 	}
 
-	if time.Now().UTC().After(mt.MatchTime.Add(-5 * time.Minute)) {
-		return respond.Error(c, http.StatusForbidden, "palpites bloqueados 5 minutos antes do início")
+	if time.Now().UTC().After(mt.MatchTime.Add(-10 * time.Minute)) {
+		return respond.Error(c, http.StatusForbidden, "palpites bloqueados 10 minutos antes do início")
 	}
 
 	if err := h.Guesses.Upsert(c.Request().Context(), userID, req.MatchID, req.HomeGuess, req.AwayGuess); err != nil {
@@ -282,6 +282,60 @@ func (h *AdminHandler) UpdateMatchScore(c *echo.Context) error {
 		"match_id": matchID,
 		"score":    map[string]int{"home": req.HomeScore, "away": req.AwayScore},
 	})
+}
+
+// ==========================================
+// 6. SYNC HANDLER
+// ==========================================
+
+type SyncHandler struct {
+	Sync    *services.MatchSyncService
+	Matches *repositories.MatchRepository
+}
+
+func NewSyncHandler(sync *services.MatchSyncService, matches *repositories.MatchRepository) *SyncHandler {
+	return &SyncHandler{Sync: sync, Matches: matches}
+}
+
+func (h *SyncHandler) SyncSchedule(c *echo.Context) error {
+	imported, err := h.Sync.SyncSchedule(c.Request().Context())
+	if err != nil {
+		return respond.Error(c, http.StatusBadGateway, "falha ao sincronizar calendário: "+err.Error())
+	}
+	return c.JSON(http.StatusOK, map[string]any{
+		"message":  "calendário sincronizado",
+		"imported": imported,
+	})
+}
+
+func (h *SyncHandler) SyncResults(c *echo.Context) error {
+	summary, err := h.Sync.SyncResults(c.Request().Context())
+	if err != nil {
+		return respond.Error(c, http.StatusBadGateway, "falha ao sincronizar resultados: "+err.Error())
+	}
+	return c.JSON(http.StatusOK, map[string]any{
+		"message":        "resultados sincronizados",
+		"linked":         summary.Linked,
+		"scores_updated": summary.ScoresUpdated,
+		"scores_skipped": summary.ScoresSkipped,
+	})
+}
+
+func (h *SyncHandler) ListRecentMatches(c *echo.Context) error {
+	limit := 20
+	if v := c.QueryParam("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+	matches, err := h.Matches.ListRecent(c.Request().Context(), limit)
+	if err != nil {
+		return respond.InternalError(c, "erro ao buscar partidas recentes")
+	}
+	if matches == nil {
+		matches = []repositories.RecentMatch{}
+	}
+	return c.JSON(http.StatusOK, matches)
 }
 
 func actorUserID(c *echo.Context) *int {
