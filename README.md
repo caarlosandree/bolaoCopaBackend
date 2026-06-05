@@ -20,8 +20,9 @@ backend/
 │   ├── handlers/    # Handlers HTTP
 │   ├── middleware/  # Middleware (JWT, CORS)
 │   └── repositories/ # Repositórios de dados
+├── migrations/      # Migrations do banco de dados
 ├── main.go          # Entry point
-├── database.sql     # Schema do banco de dados
+├── database.sql     # Schema do banco de dados (legado)
 └── go.mod           # Dependências Go
 ```
 
@@ -38,10 +39,41 @@ DB_NAME=bolao_copa
 JWT_SECRET=your_jwt_secret
 ```
 
-2. Execute o script SQL para criar o banco de dados:
+2. Instale a ferramenta de migrations (golang-migrate):
 
 ```bash
-psql -U postgres -d bolao_copa -f database.sql
+go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+```
+
+3. Execute as migrations para criar o banco de dados:
+
+```bash
+# Subir migrations (criar tabelas)
+migrate -path migrations -database "postgres://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME?sslmode=disable" up
+
+# Desfazer última migration
+migrate -path migrations -database "postgres://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME?sslmode=disable" down
+
+# Verificar versão atual
+migrate -path migrations -database "postgres://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME?sslmode=disable" version
+```
+
+## Criando Novas Migrations
+
+Para criar uma nova migration:
+
+```bash
+# Criar nova migration (substitua NOME pela descrição)
+migrate create -ext sql -dir migrations -seq NOME_DA_MIGRATION
+```
+
+Isso criará dois arquivos:
+- `NNNNNNN_NOME_DA_MIGRATION.up.sql` - SQL para aplicar a mudança
+- `NNNNNNN_NOME_DA_MIGRATION.down.sql` - SQL para reverter a mudança
+
+Exemplo:
+```bash
+migrate create -ext sql -dir migrations -seq add_user_avatar
 ```
 
 ## Instalação

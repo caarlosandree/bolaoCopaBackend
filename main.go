@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 
@@ -8,6 +9,7 @@ import (
 	"backend/internal/db"
 	"backend/internal/handlers"
 	jwtmw "backend/internal/middleware"
+	"backend/internal/migrations"
 	"backend/internal/repositories"
 
 	"github.com/labstack/echo/v5"
@@ -25,6 +27,10 @@ func main() {
 		log.Fatalf("erro ao conectar no banco: %v", err)
 	}
 	defer database.Close()
+
+	if err := migrations.Run(context.Background(), database); err != nil {
+		log.Fatalf("erro ao aplicar migrations: %v", err)
+	}
 
 	userRepo := repositories.NewUserRepository(database)
 	roundRepo := repositories.NewRoundRepository(database)
