@@ -53,6 +53,7 @@ func (r *RoundRepository) FindMatchesByRound(ctx context.Context, roundID, userI
 	rows, err := r.DB.QueryContext(ctx,
 		`SELECT m.id, m.round_id, m.home_team, m.away_team,
 		        m.home_score, m.away_score, m.status, m.match_time,
+		        m.group_name, m.venue,
 		        g.id, g.home_guess, g.away_guess, g.points_earned
 		 FROM matches m
 		 LEFT JOIN guesses g ON g.match_id = m.id AND g.user_id = $2
@@ -68,6 +69,7 @@ func (r *RoundRepository) FindMatchesByRound(ctx context.Context, roundID, userI
 	var matches []models.Match
 	for rows.Next() {
 		var m models.Match
+		var groupName, venue sql.NullString
 		var guessID sql.NullInt64
 		var homeGuess, awayGuess sql.NullInt32
 		var pointsEarned sql.NullInt32
@@ -75,10 +77,18 @@ func (r *RoundRepository) FindMatchesByRound(ctx context.Context, roundID, userI
 		err := rows.Scan(
 			&m.ID, &m.RoundID, &m.HomeTeam, &m.AwayTeam,
 			&m.HomeScore, &m.AwayScore, &m.Status, &m.MatchTime,
+			&groupName, &venue,
 			&guessID, &homeGuess, &awayGuess, &pointsEarned,
 		)
 		if err != nil {
 			return nil, err
+		}
+
+		if groupName.Valid {
+			m.GroupName = &groupName.String
+		}
+		if venue.Valid {
+			m.Venue = &venue.String
 		}
 
 		if guessID.Valid {
