@@ -110,7 +110,7 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 	}
 
 	if m.TheSportsDBEventID != nil {
-		matchID, err := r.updateMatchingImported(ctx, tx, roundID, m)
+		matchID, err := r.updateMatchingImported(ctx, tx, m)
 		if err != nil {
 			return 0, err
 		}
@@ -166,37 +166,35 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 	return matchID, nil
 }
 
-func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx, roundID int, m ImportedMatch) (int, error) {
+func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx, m ImportedMatch) (int, error) {
 	var matchID int
 	err := tx.QueryRowContext(ctx,
 		`WITH candidate AS (
 		    SELECT id
 		    FROM matches
-		    WHERE lower(home_team) = lower($9)
-		      AND lower(away_team) = lower($10)
-		      AND match_time = $11
+		    WHERE lower(home_team) = lower($8)
+		      AND lower(away_team) = lower($9)
+		      AND match_time = $10
 		      AND (
 		          thesportsdb_event_id IS NULL
-		          OR thesportsdb_event_id = $5
-		          OR external_source = $12
+		          OR thesportsdb_event_id = $4
+		          OR external_source = $11
 		      )
 		    ORDER BY id ASC
 		    LIMIT 1
 		 )
 		 UPDATE matches
-		 SET round_id = $1,
-		     group_name = $2,
-		     venue = COALESCE($3, venue),
-		     match_number = COALESCE($4, match_number),
-		     thesportsdb_event_id = COALESCE(thesportsdb_event_id, $5),
-		     thesportsdb_home_team_id = COALESCE(thesportsdb_home_team_id, $6),
-		     thesportsdb_away_team_id = COALESCE(thesportsdb_away_team_id, $7),
-		     api_football_fixture_id = COALESCE(api_football_fixture_id, $8),
+		 SET group_name = $1,
+		     venue = COALESCE($2, venue),
+		     match_number = COALESCE($3, match_number),
+		     thesportsdb_event_id = COALESCE(thesportsdb_event_id, $4),
+		     thesportsdb_home_team_id = COALESCE(thesportsdb_home_team_id, $5),
+		     thesportsdb_away_team_id = COALESCE(thesportsdb_away_team_id, $6),
+		     api_football_fixture_id = COALESCE(api_football_fixture_id, $7),
 		     updated_at = CURRENT_TIMESTAMP
 		 FROM candidate
 		 WHERE matches.id = candidate.id
 		 RETURNING matches.id`,
-		roundID,
 		m.GroupName,
 		m.Venue,
 		m.MatchNumber,
