@@ -257,9 +257,13 @@ func (h *StatisticsHandler) GetGroupStandings(c *echo.Context) error {
 		var groupOrder []string
 
 		for _, s := range standings {
-			groupName := s.StrDescription
-			if groupName == "" {
-				groupName = "Grupo"
+			norm := normalizeTeamName(s.StrTeam)
+			groupName, ok := teamToGroupMap[norm]
+			if !ok {
+				groupName = s.StrDescription
+				if groupName == "" || groupName == "Playoffs" {
+					groupName = "Grupo A"
+				}
 			}
 			if _, ok := groupMap[groupName]; !ok {
 				groupMap[groupName] = &groupDTO{Name: groupName}
@@ -276,6 +280,22 @@ func (h *StatisticsHandler) GetGroupStandings(c *echo.Context) error {
 				GA:     atoi(s.IntGoalsAgainst),
 				GD:     atoi(s.IntGoalDifference),
 				Points: atoi(s.IntPoints),
+			})
+		}
+
+		// Sort teams within each group (by points, then GD, then GF, then Name)
+		for _, g := range groupMap {
+			sort.Slice(g.Teams, func(i, j int) bool {
+				if g.Teams[i].Points != g.Teams[j].Points {
+					return g.Teams[i].Points > g.Teams[j].Points
+				}
+				if g.Teams[i].GD != g.Teams[j].GD {
+					return g.Teams[i].GD > g.Teams[j].GD
+				}
+				if g.Teams[i].GF != g.Teams[j].GF {
+					return g.Teams[i].GF > g.Teams[j].GF
+				}
+				return g.Teams[i].Name < g.Teams[j].Name
 			})
 		}
 
@@ -565,3 +585,77 @@ func normalizeRound(round string) string {
 	}
 	return ""
 }
+
+func normalizeTeamName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.ReplaceAll(name, "&", "and")
+	name = strings.ReplaceAll(name, "ç", "c")
+	name = strings.ReplaceAll(name, "ã", "a")
+	name = strings.ReplaceAll(name, "ó", "o")
+	name = strings.ReplaceAll(name, "ô", "o")
+	name = strings.ReplaceAll(name, "é", "e")
+	name = strings.ReplaceAll(name, "í", "i")
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+var teamToGroupMap = map[string]string{
+	"mexico":                       "Grupo A",
+	"southafrica":                  "Grupo A",
+	"southkorea":                   "Grupo A",
+	"czechrepublic":                "Grupo A",
+	"canada":                       "Grupo B",
+	"bosniaherzegovina":            "Grupo B",
+	"bosniaandherzegovina":         "Grupo B",
+	"qatar":                        "Grupo B",
+	"switzerland":                  "Grupo B",
+	"brazil":                       "Grupo C",
+	"morocco":                      "Grupo C",
+	"haiti":                        "Grupo C",
+	"scotland":                     "Grupo C",
+	"usa":                          "Grupo D",
+	"unitedstates":                 "Grupo D",
+	"paraguay":                     "Grupo D",
+	"australia":                    "Grupo D",
+	"turkey":                       "Grupo D",
+	"germany":                      "Grupo E",
+	"curacao":                      "Grupo E",
+	"ivorycoast":                   "Grupo E",
+	"cotedivoire":                  "Grupo E",
+	"ecuador":                      "Grupo E",
+	"netherlands":                  "Grupo F",
+	"japan":                        "Grupo F",
+	"sweden":                       "Grupo F",
+	"tunisia":                      "Grupo F",
+	"belgium":                      "Grupo G",
+	"iran":                         "Grupo G",
+	"egypt":                        "Grupo G",
+	"newzealand":                   "Grupo G",
+	"spain":                        "Grupo H",
+	"capeverde":                    "Grupo H",
+	"saudiarabia":                  "Grupo H",
+	"uruguay":                      "Grupo H",
+	"france":                       "Grupo I",
+	"senegal":                      "Grupo I",
+	"iraq":                         "Grupo I",
+	"norway":                       "Grupo I",
+	"argentina":                    "Grupo J",
+	"algeria":                      "Grupo J",
+	"austria":                      "Grupo J",
+	"jordan":                       "Grupo J",
+	"portugal":                     "Grupo K",
+	"drcongo":                      "Grupo K",
+	"democraticrepublicofthecongo": "Grupo K",
+	"uzbekistan":                   "Grupo K",
+	"colombia":                     "Grupo K",
+	"england":                      "Grupo L",
+	"croatia":                      "Grupo L",
+	"ghana":                        "Grupo L",
+	"panama":                       "Grupo L",
+}
+

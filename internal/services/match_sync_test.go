@@ -7,10 +7,10 @@ import (
 	"backend/internal/repositories"
 )
 
-func TestParseOpenFootballTimeConvertsOffsetToUTC(t *testing.T) {
-	got, err := parseOpenFootballTime("2026-06-11", "13:00 UTC-6")
+func TestParseTheSportsDBTimestamp(t *testing.T) {
+	got, err := parseTheSportsDBTimestamp("2026-06-11T19:00:00")
 	if err != nil {
-		t.Fatalf("parseOpenFootballTime returned error: %v", err)
+		t.Fatalf("parseTheSportsDBTimestamp returned error: %v", err)
 	}
 
 	want := time.Date(2026, 6, 11, 19, 0, 0, 0, time.UTC)
@@ -18,6 +18,7 @@ func TestParseOpenFootballTimeConvertsOffsetToUTC(t *testing.T) {
 		t.Fatalf("expected %s, got %s", want, got)
 	}
 }
+
 
 func TestFindWorldCup26MatchNormalizesTeamNames(t *testing.T) {
 	group := "Group B"

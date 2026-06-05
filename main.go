@@ -7,6 +7,8 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"backend/internal/audit"
@@ -120,8 +122,12 @@ func main() {
 		Audit:  auditSvc,
 	}))
 	e.Use(middleware.Recover())
+	corsOrigins := []string{"http://localhost:3000"}
+	if v := os.Getenv("CORS_ALLOWED_ORIGINS"); v != "" {
+		corsOrigins = strings.Split(v, ",")
+	}
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"http://localhost:3000"},
+		AllowOrigins: corsOrigins,
 		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
 		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch},
 	}))
@@ -169,7 +175,11 @@ func main() {
 	admin.GET("/sync/logs", syncH.ListSyncLogs)
 	admin.GET("/matches", syncH.ListMatches)
 
-	if err := e.Start(":1323"); err != nil {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "1323"
+	}
+	if err := e.Start(":" + port); err != nil {
 		logger.Error("servidor encerrado", "error", err)
 	}
 }
