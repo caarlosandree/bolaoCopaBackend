@@ -82,6 +82,81 @@ func (c *TheSportsDBClient) TeamPreviousRaw(ctx context.Context, teamID string) 
 	return c.getJSON(ctx, "/schedule/previous/team/"+url.PathEscape(teamID), nil)
 }
 
+type TheSportsDBStanding struct {
+	IDTeam            string `json:"idTeam"`
+	StrTeam           string `json:"strTeam"`
+	StrTeamBadge      string `json:"strTeamBadge"`
+	IntPlayed         string `json:"intPlayed"`
+	IntWin            string `json:"intWin"`
+	IntDraw           string `json:"intDraw"`
+	IntLoss           string `json:"intLoss"`
+	IntGoalsFor       string `json:"intGoalsFor"`
+	IntGoalsAgainst   string `json:"intGoalsAgainst"`
+	IntGoalDifference string `json:"intGoalDifference"`
+	IntPoints         string `json:"intPoints"`
+	StrDescription    string `json:"strDescription"`
+}
+
+type TheSportsDBTimelineEvent struct {
+	IDTimeline  string `json:"idTimeline"`
+	IDEvent     string `json:"idEvent"`
+	StrTimeline string `json:"strTimeline"`
+	StrPlayer   string `json:"strPlayer"`
+	StrTeam     string `json:"strTeam"`
+	IntTime     string `json:"intTime"`
+	StrBadge    string `json:"strBadge"`
+}
+
+// LookupLeagueTable busca a classificação dos grupos via API V1 (lookuptable.php).
+func (c *TheSportsDBClient) LookupLeagueTable(ctx context.Context, leagueID, season string) ([]TheSportsDBStanding, error) {
+	v1URL := fmt.Sprintf(
+		"https://www.thesportsdb.com/api/v1/json/%s/lookuptable.php?l=%s&s=%s",
+		url.QueryEscape(c.APIKey),
+		url.QueryEscape(leagueID),
+		url.QueryEscape(season),
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v1URL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "bolao-copa/1.0")
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("lookuptable retornou HTTP %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		Table []TheSportsDBStanding `json:"table"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	return payload.Table, nil
+}
+
+func (c *TheSportsDBClient) ListNextLeagueEvents(ctx context.Context, leagueID string) ([]TheSportsDBEvent, error) {
+	var payload struct {
+		Schedule []TheSportsDBEvent `json:"schedule"`
+	}
+	_, err := c.getJSON(ctx, "/schedule/next/league/"+url.PathEscape(leagueID), &payload)
+	return payload.Schedule, err
+}
+
+func (c *TheSportsDBClient) LookupTimeline(ctx context.Context, eventID string) ([]TheSportsDBTimelineEvent, error) {
+	var payload struct {
+		Timeline []TheSportsDBTimelineEvent `json:"timeline"`
+	}
+	_, err := c.getJSON(ctx, "/lookup/event_timeline/"+url.PathEscape(eventID), &payload)
+	return payload.Timeline, err
+}
+
 func (c *TheSportsDBClient) getJSON(ctx context.Context, path string, dest any) (json.RawMessage, error) {
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("THESPORTSDB_API_KEY não configurada")

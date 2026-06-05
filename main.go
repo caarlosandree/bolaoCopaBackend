@@ -58,6 +58,7 @@ func main() {
 	auditSvc.CleanupExpired(context.Background(), cfg.AuditRetentionDays)
 	scoreSvc := services.NewMatchScoreService(database, guessRepo, matchRepo)
 
+	statsRepo := repositories.NewStatisticsRepository(database)
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTSecret)
 	roundH := handlers.NewRoundHandler(roundRepo)
 	guessH := handlers.NewGuessHandler(guessRepo, matchRepo)
@@ -80,6 +81,7 @@ func main() {
 		time.Duration(cfg.MatchDetailsDailyHours)*time.Hour,
 	)
 	syncH := handlers.NewSyncHandler(matchSync, matchDetailsSync, matchRepo, auditSvc)
+	statsH := handlers.NewStatisticsHandler(statsRepo, theSportsDBClient, cfg.TheSportsDBLeagueID, cfg.TheSportsDBSeason)
 
 	if cfg.MatchSyncEnabled {
 		matchSync.Start(
@@ -147,6 +149,10 @@ func main() {
 	protected.GET("/matches/:id/details", matchDetailsH.GetByMatchID)
 	protected.GET("/me", userH.GetMe)
 	protected.POST("/me/avatar", userH.UploadAvatar)
+	protected.GET("/statistics/copa", statsH.GetCopaOverview)
+	protected.GET("/statistics/groups", statsH.GetGroupStandings)
+	protected.GET("/statistics/bracket", statsH.GetBracket)
+	protected.GET("/statistics/bolao", statsH.GetBolaoStats)
 
 	admin := api.Group("/admin")
 	admin.Use(jwtmw.JWTAuth(cfg.JWTSecret))
