@@ -109,6 +109,16 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 		return 0, err
 	}
 
+	if m.TheSportsDBEventID != nil {
+		matchID, err := r.updateMatchingImported(ctx, tx, roundID, m)
+		if err != nil {
+			return 0, err
+		}
+		if matchID != 0 {
+			return matchID, nil
+		}
+	}
+
 	var matchID int
 	err = tx.QueryRowContext(ctx,
 		`INSERT INTO matches (
@@ -151,6 +161,58 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 		m.APIFootballID,
 	).Scan(&matchID)
 	if err != nil {
+		return 0, err
+	}
+	return matchID, nil
+}
+
+func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx, roundID int, m ImportedMatch) (int, error) {
+	var matchID int
+	err := tx.QueryRowContext(ctx,
+		`WITH candidate AS (
+		    SELECT id
+		    FROM matches
+		    WHERE lower(home_team) = lower($9)
+		      AND lower(away_team) = lower($10)
+		      AND match_time = $11
+		      AND (
+		          thesportsdb_event_id IS NULL
+		          OR thesportsdb_event_id = $5
+		          OR external_source = $12
+		      )
+		    ORDER BY id ASC
+		    LIMIT 1
+		 )
+		 UPDATE matches
+		 SET round_id = $1,
+		     group_name = $2,
+		     venue = COALESCE($3, venue),
+		     match_number = COALESCE($4, match_number),
+		     thesportsdb_event_id = COALESCE(thesportsdb_event_id, $5),
+		     thesportsdb_home_team_id = COALESCE(thesportsdb_home_team_id, $6),
+		     thesportsdb_away_team_id = COALESCE(thesportsdb_away_team_id, $7),
+		     api_football_fixture_id = COALESCE(api_football_fixture_id, $8),
+		     updated_at = CURRENT_TIMESTAMP
+		 FROM candidate
+		 WHERE matches.id = candidate.id
+		 RETURNING id`,
+		roundID,
+		m.GroupName,
+		m.Venue,
+		m.MatchNumber,
+		m.TheSportsDBEventID,
+		m.TheSportsDBHomeID,
+		m.TheSportsDBAwayID,
+		m.APIFootballID,
+		m.HomeTeam,
+		m.AwayTeam,
+		m.MatchTime,
+		m.ExternalSource,
+	).Scan(&matchID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, nil
+		}
 		return 0, err
 	}
 	return matchID, nil
