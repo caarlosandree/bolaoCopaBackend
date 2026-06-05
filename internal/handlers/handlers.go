@@ -317,12 +317,13 @@ func (h *AdminHandler) GetUsers(c *echo.Context) error {
 // ==========================================
 
 type SyncHandler struct {
-	Sync    *services.MatchSyncService
-	Matches *repositories.MatchRepository
+	Sync        *services.MatchSyncService
+	DetailsSync *services.MatchDetailsSyncService
+	Matches     *repositories.MatchRepository
 }
 
-func NewSyncHandler(sync *services.MatchSyncService, matches *repositories.MatchRepository) *SyncHandler {
-	return &SyncHandler{Sync: sync, Matches: matches}
+func NewSyncHandler(sync *services.MatchSyncService, detailsSync *services.MatchDetailsSyncService, matches *repositories.MatchRepository) *SyncHandler {
+	return &SyncHandler{Sync: sync, DetailsSync: detailsSync, Matches: matches}
 }
 
 func (h *SyncHandler) SyncSchedule(c *echo.Context) error {
@@ -366,9 +367,95 @@ func (h *SyncHandler) ListRecentMatches(c *echo.Context) error {
 	return c.JSON(http.StatusOK, matches)
 }
 
+func (h *SyncHandler) SyncMatchDetails(c *echo.Context) error {
+	if h.DetailsSync == nil {
+		return respond.Error(c, http.StatusServiceUnavailable, "sync de detalhes não configurado")
+	}
+	summary, err := h.DetailsSync.SyncAll(c.Request().Context())
+	if err != nil {
+		return respond.Error(c, http.StatusBadGateway, "falha ao sincronizar detalhes: "+err.Error())
+	}
+	return c.JSON(http.StatusOK, map[string]any{
+		"message":           "detalhes das partidas sincronizados",
+		"schedule_imported": summary.ScheduleImported,
+		"details_updated":   summary.DetailsUpdated,
+		"odds_linked":       summary.OddsLinked,
+		"failures":          summary.Failures,
+	})
+}
+
+func (h *SyncHandler) SyncOneMatchDetails(c *echo.Context) error {
+	if h.DetailsSync == nil {
+		return respond.Error(c, http.StatusServiceUnavailable, "sync de detalhes não configurado")
+	}
+	matchID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		return respond.Error(c, http.StatusBadRequest, "ID de partida inválido")
+	}
+	if err := h.DetailsSync.SyncMatchByID(c.Request().Context(), matchID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return respond.Error(c, http.StatusNotFound, "partida não encontrada")
+		}
+		return respond.Error(c, http.StatusBadGateway, "falha ao sincronizar detalhes: "+err.Error())
+	}
+	return c.JSON(http.StatusOK, map[string]any{
+		"message":  "detalhes da partida sincronizados",
+		"match_id": matchID,
+	})
+}
+
 // ==========================================
 // 7. USER HANDLER (perfil / avatar)
 // ==========================================
+
+type MatchDetailsHandler struct {
+	Details *repositories.MatchDetailsRepository
+}
+
+func NewMatchDetailsHandler(details *repositories.MatchDetailsRepository) *MatchDetailsHandler {
+	return &MatchDetailsHandler{Details: details}
+}
+
+func (h *MatchDetailsHandler) GetByMatchID(c *echo.Context) error {
+	matchID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		return respond.Error(c, http.StatusBadRequest, "ID de partida inválido")
+	}
+	details, err := h.Details.FindByMatchID(c.Request().Context(), matchID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return c.JSON(http.StatusOK, map[string]any{
+				"match_id": matchID,
+				"availability": map[string]bool{
+					"odds":        false,
+					"predictions": false,
+					"form":        false,
+					"h2h":         false,
+					"lineups":     false,
+					"statistics":  false,
+					"injuries":    false,
+					"events":      false,
+					"media":       false,
+				},
+				"odds":              nil,
+				"predictions":       nil,
+				"recent_form":       nil,
+				"head_to_head":      nil,
+				"lineups":           nil,
+				"statistics":        nil,
+				"injuries":          nil,
+				"events":            nil,
+				"media":             nil,
+				"source_status":     []models.SourceStatus{},
+				"last_synced_at":    nil,
+				"lineups_synced_at": nil,
+				"updated_at":        nil,
+			})
+		}
+		return respond.InternalError(c, "erro ao buscar detalhes da partida")
+	}
+	return c.JSON(http.StatusOK, details.Response())
+}
 
 const (
 	maxAvatarSize = 5 << 20 // 5 MB

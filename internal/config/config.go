@@ -27,6 +27,15 @@ type Config struct {
 	OpenFootballURL              string
 	WorldCup26BaseURL            string
 	BaseURL                      string
+	TheSportsDBAPIKey            string
+	TheSportsDBBaseURL           string
+	TheSportsDBLeagueID          string
+	TheSportsDBSeason            string
+	OddsAPIKey                   string
+	OddsAPIBaseURL               string
+	MatchDetailsSyncEnabled      bool
+	MatchDetailsDailyHours       int
+	MatchDetailsLineupMinutes    int
 }
 
 func Load() (*Config, error) {
@@ -51,6 +60,15 @@ func Load() (*Config, error) {
 	cfg.OpenFootballURL = getenvDefault("OPENFOOTBALL_WORLD_CUP_URL", "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json")
 	cfg.WorldCup26BaseURL = strings.TrimRight(getenvDefault("WORLDCUP26_BASE_URL", "https://worldcup26.ir"), "/")
 	cfg.BaseURL = strings.TrimRight(getenvDefault("BASE_URL", "http://localhost:1323"), "/")
+	cfg.TheSportsDBAPIKey = os.Getenv("THESPORTSDB_API_KEY")
+	cfg.TheSportsDBBaseURL = strings.TrimRight(getenvDefault("THESPORTSDB_BASE_URL", "https://www.thesportsdb.com/api/v2/json"), "/")
+	cfg.TheSportsDBLeagueID = getenvDefault("THESPORTSDB_WORLD_CUP_LEAGUE_ID", "4429")
+	cfg.TheSportsDBSeason = getenvDefault("THESPORTSDB_WORLD_CUP_SEASON", "2026")
+	cfg.OddsAPIKey = os.Getenv("ODDS_API_KEY")
+	cfg.OddsAPIBaseURL = strings.TrimRight(getenvDefault("ODDS_API_BASE_URL", "https://api.odds-api.io/v3"), "/")
+	cfg.MatchDetailsSyncEnabled = getenvBoolDefault("MATCH_DETAILS_SYNC_ENABLED", true)
+	cfg.MatchDetailsDailyHours = getenvIntDefault("MATCH_DETAILS_DAILY_INTERVAL_HOURS", 24)
+	cfg.MatchDetailsLineupMinutes = getenvIntDefault("MATCH_DETAILS_LINEUP_REFRESH_MINUTES", 90)
 
 	if cfg.JWTSecret == "" {
 		return nil, fmt.Errorf("JWT_SECRET não definido no .env")

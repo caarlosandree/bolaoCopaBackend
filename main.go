@@ -52,6 +52,7 @@ func main() {
 	roundRepo := repositories.NewRoundRepository(database)
 	guessRepo := repositories.NewGuessRepository(database)
 	matchRepo := repositories.NewMatchRepository(database)
+	matchDetailsRepo := repositories.NewMatchDetailsRepository(database)
 	auditRepo := audit.NewRepository(database)
 	auditSvc := audit.NewService(cfg.AuditEnabled, auditRepo, logger)
 	auditSvc.CleanupExpired(context.Background(), cfg.AuditRetentionDays)
@@ -63,9 +64,24 @@ func main() {
 	rankH := handlers.NewRankingHandler(userRepo)
 	adminH := handlers.NewAdminHandler(guessRepo, matchRepo, scoreSvc, auditSvc, userRepo)
 	userH := handlers.NewUserHandler(userRepo, cfg.BaseURL)
+	matchDetailsH := handlers.NewMatchDetailsHandler(matchDetailsRepo)
 
 	matchSync := services.NewMatchSyncService(database, matchRepo, scoreSvc, logger, cfg.OpenFootballURL, cfg.WorldCup26BaseURL)
-	syncH := handlers.NewSyncHandler(matchSync, matchRepo)
+	theSportsDBClient := services.NewTheSportsDBClient(cfg.TheSportsDBBaseURL, cfg.TheSportsDBAPIKey)
+	oddsClient := services.NewOddsAPIClient(cfg.OddsAPIBaseURL, cfg.OddsAPIKey)
+	matchDetailsSync := services.NewMatchDetailsSyncService(
+		database,
+		matchRepo,
+		matchDetailsRepo,
+		theSportsDBClient,
+		oddsClient,
+		logger,
+		cfg.TheSportsDBLeagueID,
+		cfg.TheSportsDBSeason,
+		time.Duration(cfg.MatchDetailsLineupMinutes)*time.Minute,
+		time.Duration(cfg.MatchDetailsDailyHours)*time.Hour,
+	)
+	syncH := handlers.NewSyncHandler(matchSync, matchDetailsSync, matchRepo)
 
 	if cfg.MatchSyncEnabled {
 		matchSync.Start(
@@ -73,6 +89,9 @@ func main() {
 			time.Duration(cfg.MatchResultRetryMinutes)*time.Minute,
 			time.Duration(cfg.MatchResultCheckAfterMinutes)*time.Minute,
 		)
+	}
+	if cfg.MatchDetailsSyncEnabled {
+		matchDetailsSync.Start(context.Background())
 	}
 
 	e := echo.New()
@@ -125,6 +144,7 @@ func main() {
 	protected.Use(jwtmw.JWTAuth(cfg.JWTSecret))
 	protected.GET("/rounds/active", roundH.GetActiveRound)
 	protected.POST("/guesses", guessH.SaveGuess)
+	protected.GET("/matches/:id/details", matchDetailsH.GetByMatchID)
 	protected.GET("/me", userH.GetMe)
 	protected.POST("/me/avatar", userH.UploadAvatar)
 
@@ -136,6 +156,8 @@ func main() {
 	admin.POST("/matches/:id/score", adminH.UpdateMatchScore)
 	admin.POST("/sync/schedule", syncH.SyncSchedule)
 	admin.POST("/sync/results", syncH.SyncResults)
+	admin.POST("/sync/match-details", syncH.SyncMatchDetails)
+	admin.POST("/sync/matches/:id/details", syncH.SyncOneMatchDetails)
 	admin.GET("/matches/recent", syncH.ListRecentMatches)
 
 	if err := e.Start(":1323"); err != nil {

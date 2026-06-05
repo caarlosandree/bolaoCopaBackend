@@ -22,18 +22,22 @@ type MatchTime struct {
 }
 
 type ImportedMatch struct {
-	ExternalSource    string
-	ExternalID        string
-	WorldCup26MatchID *string
-	TournamentName    string
-	RoundNumber       int
-	RoundName         string
-	HomeTeam          string
-	AwayTeam          string
-	MatchTime         time.Time
-	GroupName         *string
-	Venue             *string
-	MatchNumber       *int
+	ExternalSource     string
+	ExternalID         string
+	WorldCup26MatchID  *string
+	TheSportsDBEventID *string
+	TheSportsDBHomeID  *string
+	TheSportsDBAwayID  *string
+	APIFootballID      *string
+	TournamentName     string
+	RoundNumber        int
+	RoundName          string
+	HomeTeam           string
+	AwayTeam           string
+	MatchTime          time.Time
+	GroupName          *string
+	Venue              *string
+	MatchNumber        *int
 }
 
 type MatchSyncRow struct {
@@ -109,9 +113,11 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 	err = tx.QueryRowContext(ctx,
 		`INSERT INTO matches (
 		    round_id, home_team, away_team, match_time, status,
-		    external_source, external_id, worldcup26_match_id, group_name, venue, match_number
+		    external_source, external_id, worldcup26_match_id, group_name, venue, match_number,
+		    thesportsdb_event_id, thesportsdb_home_team_id, thesportsdb_away_team_id,
+		    api_football_fixture_id
 		 )
-		 VALUES ($1, $2, $3, $4, 'scheduled', $5, $6, $7, $8, $9, $10)
+		 VALUES ($1, $2, $3, $4, 'scheduled', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		 ON CONFLICT (external_source, external_id)
 		 WHERE external_source IS NOT NULL AND external_id IS NOT NULL
 		 DO UPDATE SET
@@ -123,6 +129,10 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 		    group_name = EXCLUDED.group_name,
 		    venue = EXCLUDED.venue,
 		    match_number = EXCLUDED.match_number,
+		    thesportsdb_event_id = COALESCE(matches.thesportsdb_event_id, EXCLUDED.thesportsdb_event_id),
+		    thesportsdb_home_team_id = COALESCE(matches.thesportsdb_home_team_id, EXCLUDED.thesportsdb_home_team_id),
+		    thesportsdb_away_team_id = COALESCE(matches.thesportsdb_away_team_id, EXCLUDED.thesportsdb_away_team_id),
+		    api_football_fixture_id = COALESCE(matches.api_football_fixture_id, EXCLUDED.api_football_fixture_id),
 		    updated_at = CURRENT_TIMESTAMP
 		 RETURNING id`,
 		roundID,
@@ -135,11 +145,88 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 		m.GroupName,
 		m.Venue,
 		m.MatchNumber,
+		m.TheSportsDBEventID,
+		m.TheSportsDBHomeID,
+		m.TheSportsDBAwayID,
+		m.APIFootballID,
 	).Scan(&matchID)
 	if err != nil {
 		return 0, err
 	}
 	return matchID, nil
+}
+
+func (r *MatchRepository) UpdateOddsAPIEventID(ctx context.Context, matchID int, oddsEventID string) error {
+	_, err := r.DB.ExecContext(ctx,
+		`UPDATE matches
+		 SET odds_api_event_id = $1, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = $2 AND (odds_api_event_id IS NULL OR odds_api_event_id = $1)`,
+		oddsEventID,
+		matchID,
+	)
+	return err
+}
+
+type DetailsSyncMatch struct {
+	ID                   int
+	HomeTeam             string
+	AwayTeam             string
+	Status               string
+	MatchTime            time.Time
+	TheSportsDBEventID   *string
+	TheSportsDBHomeID    *string
+	TheSportsDBAwayID    *string
+	OddsAPIEventID       *string
+	APIFootballFixtureID *string
+}
+
+func (r *MatchRepository) ListForDetailsSync(ctx context.Context) ([]DetailsSyncMatch, error) {
+	rows, err := r.DB.QueryContext(ctx,
+		`SELECT id, home_team, away_team, status, match_time,
+		        thesportsdb_event_id, thesportsdb_home_team_id, thesportsdb_away_team_id,
+		        odds_api_event_id, api_football_fixture_id
+		 FROM matches
+		 ORDER BY match_time ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var matches []DetailsSyncMatch
+	for rows.Next() {
+		var m DetailsSyncMatch
+		var eventID, homeID, awayID, oddsID, apiFootballID sql.NullString
+		if err := rows.Scan(
+			&m.ID,
+			&m.HomeTeam,
+			&m.AwayTeam,
+			&m.Status,
+			&m.MatchTime,
+			&eventID,
+			&homeID,
+			&awayID,
+			&oddsID,
+			&apiFootballID,
+		); err != nil {
+			return nil, err
+		}
+		m.TheSportsDBEventID = stringPtrIfValid(eventID)
+		m.TheSportsDBHomeID = stringPtrIfValid(homeID)
+		m.TheSportsDBAwayID = stringPtrIfValid(awayID)
+		m.OddsAPIEventID = stringPtrIfValid(oddsID)
+		m.APIFootballFixtureID = stringPtrIfValid(apiFootballID)
+		matches = append(matches, m)
+	}
+	return matches, rows.Err()
+}
+
+func stringPtrIfValid(value sql.NullString) *string {
+	if value.Valid && value.String != "" {
+		v := value.String
+		return &v
+	}
+	return nil
 }
 
 func (r *MatchRepository) ListForSync(ctx context.Context) ([]MatchSyncRow, error) {
