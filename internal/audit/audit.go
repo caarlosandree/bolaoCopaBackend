@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -91,6 +92,64 @@ func (r *Repository) DeleteOlderThan(ctx context.Context, retentionDays int) (in
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+type LogEntry struct {
+	OccurredAt time.Time      `json:"occurred_at"`
+	Action     string         `json:"action"`
+	StatusCode int            `json:"status_code"`
+	Outcome    string         `json:"outcome"`
+	Path       string         `json:"path"`
+	Metadata   map[string]any `json:"metadata"`
+}
+
+func (r *Repository) ListByActions(ctx context.Context, actions []string, limit int) ([]LogEntry, error) {
+	if len(actions) == 0 {
+		return []LogEntry{}, nil
+	}
+
+	placeholders := make([]string, len(actions))
+	args := make([]any, 0, len(actions)+1)
+	for i, action := range actions {
+		placeholders[i] = "$" + strconv.Itoa(i+1)
+		args = append(args, action)
+	}
+	args = append(args, limit)
+
+	rows, err := r.DB.QueryContext(ctx, `
+		SELECT occurred_at, action, status_code, outcome, path, metadata
+		FROM audit_logs
+		WHERE action IN (`+strings.Join(placeholders, ", ")+`)
+		ORDER BY occurred_at DESC
+		LIMIT $`+strconv.Itoa(len(args))+`
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	logs := []LogEntry{}
+	for rows.Next() {
+		var entry LogEntry
+		var metadata []byte
+		if err := rows.Scan(
+			&entry.OccurredAt,
+			&entry.Action,
+			&entry.StatusCode,
+			&entry.Outcome,
+			&entry.Path,
+			&metadata,
+		); err != nil {
+			return nil, err
+		}
+		if len(metadata) > 0 {
+			if err := json.Unmarshal(metadata, &entry.Metadata); err != nil {
+				entry.Metadata = map[string]any{}
+			}
+		}
+		logs = append(logs, entry)
+	}
+	return logs, rows.Err()
 }
 
 type Service struct {

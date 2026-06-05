@@ -372,17 +372,20 @@ type SyncHandler struct {
 	Sync        *services.MatchSyncService
 	DetailsSync *services.MatchDetailsSyncService
 	Matches     *repositories.MatchRepository
+	Audit       *audit.Service
 }
 
-func NewSyncHandler(sync *services.MatchSyncService, detailsSync *services.MatchDetailsSyncService, matches *repositories.MatchRepository) *SyncHandler {
-	return &SyncHandler{Sync: sync, DetailsSync: detailsSync, Matches: matches}
+func NewSyncHandler(sync *services.MatchSyncService, detailsSync *services.MatchDetailsSyncService, matches *repositories.MatchRepository, auditSvc *audit.Service) *SyncHandler {
+	return &SyncHandler{Sync: sync, DetailsSync: detailsSync, Matches: matches, Audit: auditSvc}
 }
 
 func (h *SyncHandler) SyncSchedule(c *echo.Context) error {
 	imported, err := h.Sync.SyncSchedule(c.Request().Context())
 	if err != nil {
+		h.recordSyncAudit(c, "admin.sync.schedule", http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return respond.Error(c, http.StatusBadGateway, "falha ao sincronizar calendário: "+err.Error())
 	}
+	h.recordSyncAudit(c, "admin.sync.schedule", http.StatusOK, map[string]any{"imported": imported})
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":  "calendário sincronizado",
 		"imported": imported,
@@ -392,8 +395,14 @@ func (h *SyncHandler) SyncSchedule(c *echo.Context) error {
 func (h *SyncHandler) SyncResults(c *echo.Context) error {
 	summary, err := h.Sync.SyncResults(c.Request().Context())
 	if err != nil {
+		h.recordSyncAudit(c, "admin.sync.results", http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return respond.Error(c, http.StatusBadGateway, "falha ao sincronizar resultados: "+err.Error())
 	}
+	h.recordSyncAudit(c, "admin.sync.results", http.StatusOK, map[string]any{
+		"linked":         summary.Linked,
+		"scores_updated": summary.ScoresUpdated,
+		"scores_skipped": summary.ScoresSkipped,
+	})
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":        "resultados sincronizados",
 		"linked":         summary.Linked,
@@ -402,19 +411,22 @@ func (h *SyncHandler) SyncResults(c *echo.Context) error {
 	})
 }
 
-func (h *SyncHandler) ListRecentMatches(c *echo.Context) error {
-	limit := 20
-	if v := c.QueryParam("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
-			limit = n
+func (h *SyncHandler) ListMatches(c *echo.Context) error {
+	page := 1
+	if v := c.QueryParam("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
 		}
 	}
-	matches, err := h.Matches.ListRecent(c.Request().Context(), limit)
-	if err != nil {
-		return respond.InternalError(c, "erro ao buscar partidas recentes")
+	pageSize := 12
+	if v := c.QueryParam("page_size"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+			pageSize = n
+		}
 	}
-	if matches == nil {
-		matches = []repositories.RecentMatch{}
+	matches, err := h.Matches.ListAdminPage(c.Request().Context(), page, pageSize)
+	if err != nil {
+		return respond.InternalError(c, "erro ao buscar partidas")
 	}
 	return c.JSON(http.StatusOK, matches)
 }
@@ -425,8 +437,15 @@ func (h *SyncHandler) SyncMatchDetails(c *echo.Context) error {
 	}
 	summary, err := h.DetailsSync.SyncAll(c.Request().Context())
 	if err != nil {
+		h.recordSyncAudit(c, "admin.sync.match_details", http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return respond.Error(c, http.StatusBadGateway, "falha ao sincronizar detalhes: "+err.Error())
 	}
+	h.recordSyncAudit(c, "admin.sync.match_details", http.StatusOK, map[string]any{
+		"schedule_imported": summary.ScheduleImported,
+		"details_updated":   summary.DetailsUpdated,
+		"odds_linked":       summary.OddsLinked,
+		"failures":          len(summary.Failures),
+	})
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":           "detalhes das partidas sincronizados",
 		"schedule_imported": summary.ScheduleImported,
@@ -459,10 +478,12 @@ func (h *SyncHandler) SyncOneMatchDetails(c *echo.Context) error {
 func (h *SyncHandler) ResetSchedule(c *echo.Context) error {
 	ctx := c.Request().Context()
 	if err := h.Matches.ResetSchedule(ctx); err != nil {
+		h.recordSyncAudit(c, "admin.sync.reset_schedule", http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return respond.InternalError(c, "falha ao resetar calendário: "+err.Error())
 	}
 	imported, err := h.Sync.SyncSchedule(ctx)
 	if err != nil {
+		h.recordSyncAudit(c, "admin.sync.reset_schedule", http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return respond.Error(c, http.StatusBadGateway, "reset ok, mas reimportação falhou: "+err.Error())
 	}
 	detailsSummary := map[string]any{"skipped": true}
@@ -477,10 +498,65 @@ func (h *SyncHandler) ResetSchedule(c *echo.Context) error {
 			}
 		}
 	}
+	h.recordSyncAudit(c, "admin.sync.reset_schedule", http.StatusOK, map[string]any{
+		"imported": imported,
+		"details":  detailsSummary,
+	})
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":  "calendário resetado e reimportado",
 		"imported": imported,
 		"details":  detailsSummary,
+	})
+}
+
+func (h *SyncHandler) ListSyncLogs(c *echo.Context) error {
+	if h.Audit == nil || h.Audit.Repo == nil {
+		return c.JSON(http.StatusOK, []audit.LogEntry{})
+	}
+
+	limit := 30
+	if v := c.QueryParam("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+
+	var actions []string
+	switch c.QueryParam("scope") {
+	case "results":
+		actions = []string{"admin.sync.results"}
+	default:
+		actions = []string{
+			"admin.sync.schedule",
+			"admin.sync.reset_schedule",
+			"admin.sync.match_details",
+		}
+	}
+
+	logs, err := h.Audit.Repo.ListByActions(c.Request().Context(), actions, limit)
+	if err != nil {
+		return respond.InternalError(c, "erro ao buscar histórico de cargas")
+	}
+	return c.JSON(http.StatusOK, logs)
+}
+
+func (h *SyncHandler) recordSyncAudit(c *echo.Context, action string, status int, metadata map[string]any) {
+	if h.Audit == nil {
+		return
+	}
+	h.Audit.Record(c.Request().Context(), audit.Event{
+		RequestID:    requestctx.RequestID(c),
+		ActorUserID:  actorUserID(c),
+		ActorRole:    actorRole(c),
+		Action:       action,
+		ResourceType: "sync",
+		Method:       c.Request().Method,
+		Path:         c.Request().URL.Path,
+		StatusCode:   status,
+		Outcome:      audit.OutcomeFromStatus(status),
+		IP:           c.RealIP(),
+		UserAgent:    c.Request().UserAgent(),
+		Metadata:     metadata,
 	})
 }
 

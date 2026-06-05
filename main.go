@@ -81,7 +81,7 @@ func main() {
 		time.Duration(cfg.MatchDetailsLineupMinutes)*time.Minute,
 		time.Duration(cfg.MatchDetailsDailyHours)*time.Hour,
 	)
-	syncH := handlers.NewSyncHandler(matchSync, matchDetailsSync, matchRepo)
+	syncH := handlers.NewSyncHandler(matchSync, matchDetailsSync, matchRepo, auditSvc)
 
 	if cfg.MatchSyncEnabled {
 		matchSync.Start(
@@ -162,7 +162,8 @@ func main() {
 	admin.POST("/sync/reset-schedule", syncH.ResetSchedule)
 	admin.POST("/sync/match-details", syncH.SyncMatchDetails)
 	admin.POST("/sync/matches/:id/details", syncH.SyncOneMatchDetails)
-	admin.GET("/matches/recent", syncH.ListRecentMatches)
+	admin.GET("/sync/logs", syncH.ListSyncLogs)
+	admin.GET("/matches", syncH.ListMatches)
 
 	if err := e.Start(":1323"); err != nil {
 		logger.Error("servidor encerrado", "error", err)

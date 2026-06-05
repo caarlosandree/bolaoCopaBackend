@@ -364,7 +364,7 @@ func (r *MatchRepository) LinkWorldCup26Match(ctx context.Context, tx *sql.Tx, m
 	return err
 }
 
-type RecentMatch struct {
+type AdminMatch struct {
 	ID        int       `json:"id"`
 	HomeTeam  string    `json:"home_team"`
 	AwayTeam  string    `json:"away_team"`
@@ -376,24 +376,47 @@ type RecentMatch struct {
 	GroupName *string   `json:"group_name"`
 }
 
-func (r *MatchRepository) ListRecent(ctx context.Context, limit int) ([]RecentMatch, error) {
+type AdminMatchesPage struct {
+	Items      []AdminMatch `json:"items"`
+	Total      int          `json:"total"`
+	Page       int          `json:"page"`
+	PageSize   int          `json:"page_size"`
+	TotalPages int          `json:"total_pages"`
+}
+
+func (r *MatchRepository) ListAdminPage(ctx context.Context, page, pageSize int) (*AdminMatchesPage, error) {
+	var total int
+	if err := r.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM matches`).Scan(&total); err != nil {
+		return nil, err
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = (total + pageSize - 1) / pageSize
+	}
+	if page > totalPages && totalPages > 0 {
+		page = totalPages
+	}
+	offset := (page - 1) * pageSize
+
 	rows, err := r.DB.QueryContext(ctx,
 		`SELECT m.id, m.home_team, m.away_team, m.home_score, m.away_score, m.status,
 		        m.match_time, r.name AS round_name, m.group_name
 		 FROM matches m
 		 JOIN rounds r ON r.id = m.round_id
-		 ORDER BY m.match_time DESC
-		 LIMIT $1`,
-		limit,
+		 ORDER BY m.match_time ASC, m.id ASC
+		 LIMIT $1 OFFSET $2`,
+		pageSize,
+		offset,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var matches []RecentMatch
+	matches := []AdminMatch{}
 	for rows.Next() {
-		var m RecentMatch
+		var m AdminMatch
 		var homeScore, awayScore sql.NullInt32
 		var groupName sql.NullString
 		if err := rows.Scan(
@@ -416,7 +439,16 @@ func (r *MatchRepository) ListRecent(ctx context.Context, limit int) ([]RecentMa
 		}
 		matches = append(matches, m)
 	}
-	return matches, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return &AdminMatchesPage{
+		Items:      matches,
+		Total:      total,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+	}, nil
 }
 
 func (r *MatchRepository) FindByIDForUpdate(ctx context.Context, tx *sql.Tx, matchID int) (*models.Match, error) {
