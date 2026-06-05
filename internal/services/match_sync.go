@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -15,16 +14,19 @@ import (
 	"backend/internal/repositories"
 )
 
-const openFootballSource = "openfootball"
+const theSportsDBSource = "thesportsdb"
 
 type MatchSyncService struct {
-	DB              *sql.DB
-	Matches         *repositories.MatchRepository
-	Score           *MatchScoreService
-	HTTPClient      *http.Client
-	Logger          *slog.Logger
-	OpenFootballURL string
-	WorldCup26URL   string
+	DB            *sql.DB
+	Matches       *repositories.MatchRepository
+	Rounds        *repositories.RoundRepository
+	Score         *MatchScoreService
+	TheSportsDB   *TheSportsDBClient
+	LeagueID      string
+	Season        string
+	HTTPClient    *http.Client
+	Logger        *slog.Logger
+	WorldCup26URL string
 }
 
 type MatchSyncSummary struct {
@@ -35,46 +37,32 @@ type MatchSyncSummary struct {
 	SourceFailures []string
 }
 
-func NewMatchSyncService(db *sql.DB, matches *repositories.MatchRepository, score *MatchScoreService, logger *slog.Logger, openFootballURL, worldCup26BaseURL string) *MatchSyncService {
+func NewMatchSyncService(
+	db *sql.DB,
+	matches *repositories.MatchRepository,
+	rounds *repositories.RoundRepository,
+	score *MatchScoreService,
+	theSportsDB *TheSportsDBClient,
+	leagueID, season string,
+	logger *slog.Logger,
+	worldCup26BaseURL string,
+) *MatchSyncService {
 	return &MatchSyncService{
-		DB:              db,
-		Matches:         matches,
-		Score:           score,
-		HTTPClient:      &http.Client{Timeout: 20 * time.Second},
-		Logger:          logger,
-		OpenFootballURL: openFootballURL,
-		WorldCup26URL:   strings.TrimRight(worldCup26BaseURL, "/") + "/get/games",
+		DB:            db,
+		Matches:       matches,
+		Rounds:        rounds,
+		Score:         score,
+		TheSportsDB:   theSportsDB,
+		LeagueID:      leagueID,
+		Season:        season,
+		HTTPClient:    &http.Client{Timeout: 20 * time.Second},
+		Logger:        logger,
+		WorldCup26URL: strings.TrimRight(worldCup26BaseURL, "/") + "/get/games",
 	}
-}
-
-func (s *MatchSyncService) Sync(ctx context.Context) (MatchSyncSummary, error) {
-	var summary MatchSyncSummary
-
-	imported, err := s.importOpenFootball(ctx)
-	if err != nil {
-		summary.SourceFailures = append(summary.SourceFailures, fmt.Sprintf("openfootball: %v", err))
-	} else {
-		summary.Imported = imported
-	}
-
-	liveSummary, err := s.updateFromWorldCup26(ctx)
-	if err != nil {
-		summary.SourceFailures = append(summary.SourceFailures, fmt.Sprintf("worldcup26: %v", err))
-	} else {
-		summary.Linked += liveSummary.Linked
-		summary.ScoresUpdated += liveSummary.ScoresUpdated
-		summary.ScoresSkipped += liveSummary.ScoresSkipped
-	}
-
-	if len(summary.SourceFailures) == 2 {
-		return summary, fmt.Errorf("todas as fontes de partidas falharam: %s", strings.Join(summary.SourceFailures, "; "))
-	}
-
-	return summary, nil
 }
 
 func (s *MatchSyncService) SyncSchedule(ctx context.Context) (int, error) {
-	return s.importOpenFootball(ctx)
+	return s.importFromTheSportsDB(ctx)
 }
 
 func (s *MatchSyncService) SyncResults(ctx context.Context) (MatchSyncSummary, error) {
@@ -92,6 +80,7 @@ func (s *MatchSyncService) SyncResults(ctx context.Context) (MatchSyncSummary, e
 func (s *MatchSyncService) Start(ctx context.Context, retryInterval, resultCheckAfter time.Duration) {
 	go func() {
 		s.runLoggedScheduleImport(ctx)
+		s.runLoggedRoundTransitions(ctx)
 		s.runLoggedDueResultSync(ctx, resultCheckAfter)
 
 		ticker := time.NewTicker(retryInterval)
@@ -101,6 +90,7 @@ func (s *MatchSyncService) Start(ctx context.Context, retryInterval, resultCheck
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				s.runLoggedRoundTransitions(ctx)
 				s.runLoggedDueResultSync(ctx, resultCheckAfter)
 			}
 		}
@@ -108,12 +98,28 @@ func (s *MatchSyncService) Start(ctx context.Context, retryInterval, resultCheck
 }
 
 func (s *MatchSyncService) runLoggedScheduleImport(ctx context.Context) {
-	imported, err := s.importOpenFootball(ctx)
+	imported, err := s.importFromTheSportsDB(ctx)
 	if err != nil {
 		s.Logger.Error("importação de calendário da Copa falhou", "error", err)
 		return
 	}
 	s.Logger.Info("calendário da Copa importado", "imported", imported)
+}
+
+func (s *MatchSyncService) runLoggedRoundTransitions(ctx context.Context) {
+	activated, err := s.Rounds.ActivateDueRounds(ctx)
+	if err != nil {
+		s.Logger.Error("falha ao ativar rodadas pendentes", "error", err)
+	} else if activated > 0 {
+		s.Logger.Info("rodadas ativadas automaticamente", "count", activated)
+	}
+
+	finished, err := s.Rounds.FinishCompletedRounds(ctx)
+	if err != nil {
+		s.Logger.Error("falha ao finalizar rodadas concluídas", "error", err)
+	} else if finished > 0 {
+		s.Logger.Info("rodadas finalizadas automaticamente", "count", finished)
+	}
 }
 
 func (s *MatchSyncService) runLoggedDueResultSync(ctx context.Context, resultCheckAfter time.Duration) {
@@ -133,28 +139,16 @@ func (s *MatchSyncService) runLoggedDueResultSync(ctx context.Context, resultChe
 	)
 }
 
-type openFootballResponse struct {
-	Name    string              `json:"name"`
-	Matches []openFootballMatch `json:"matches"`
-}
-
-type openFootballMatch struct {
-	Round  string `json:"round"`
-	Date   string `json:"date"`
-	Time   string `json:"time"`
-	Team1  string `json:"team1"`
-	Team2  string `json:"team2"`
-	Group  string `json:"group"`
-	Ground string `json:"ground"`
-}
-
-func (s *MatchSyncService) importOpenFootball(ctx context.Context) (int, error) {
-	var payload openFootballResponse
-	if err := s.getJSON(ctx, s.OpenFootballURL, &payload); err != nil {
-		return 0, err
+// importFromTheSportsDB importa o calendário da Copa via TheSportsDB v2.
+// Cada intRound agrupa todos os jogos daquela rodada (ex: Round 1 = 24 jogos da fase de grupos).
+func (s *MatchSyncService) importFromTheSportsDB(ctx context.Context) (int, error) {
+	if s.TheSportsDB == nil {
+		return 0, fmt.Errorf("TheSportsDB client não configurado")
 	}
-	if payload.Name == "" {
-		payload.Name = "World Cup 2026"
+
+	events, _, err := s.TheSportsDB.ListLeagueSchedule(ctx, s.LeagueID, s.Season)
+	if err != nil {
+		return 0, fmt.Errorf("falha ao buscar calendário do TheSportsDB: %w", err)
 	}
 
 	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
@@ -164,36 +158,41 @@ func (s *MatchSyncService) importOpenFootball(ctx context.Context) (int, error) 
 	defer tx.Rollback()
 
 	imported := 0
-	for i, match := range payload.Matches {
-		matchTime, err := parseOpenFootballTime(match.Date, match.Time)
+	for i, event := range events {
+		matchTime, err := parseTheSportsDBTimestamp(event.Timestamp)
 		if err != nil {
-			return imported, fmt.Errorf("partida %d: %w", i+1, err)
+			return imported, fmt.Errorf("evento %d (%s): timestamp inválido %q: %w", i+1, event.IDEvent, event.Timestamp, err)
 		}
 
-		groupName := emptyStringToNil(match.Group)
-		venue := emptyStringToNil(match.Ground)
-		matchNumber := i + 1
+		roundNum := parseIntRound(event.Round)
+		roundName := theSportsDBRoundName(roundNum)
+		eventID := event.IDEvent
+		homeTeamID := event.HomeTeamID
+		awayTeamID := event.AwayTeamID
+		groupName := emptyStringToNil(event.Group)
+		venue := emptyStringToNil(event.Venue)
+		matchNum := i + 1
+
 		_, err = s.Matches.UpsertImported(ctx, tx, repositories.ImportedMatch{
-			ExternalSource: openFootballSource,
-			ExternalID:     openFootballID(match),
-			TournamentName: payload.Name,
-			RoundNumber:    roundNumber(match.Round),
-			RoundName:      match.Round,
-			HomeTeam:       match.Team1,
-			AwayTeam:       match.Team2,
-			MatchTime:      matchTime,
-			GroupName:      groupName,
-			Venue:          venue,
-			MatchNumber:    &matchNumber,
+			ExternalSource:     theSportsDBSource,
+			ExternalID:         eventID,
+			TournamentName:     "FIFA World Cup 2026",
+			RoundNumber:        roundNum,
+			RoundName:          roundName,
+			HomeTeam:           event.HomeTeam,
+			AwayTeam:           event.AwayTeam,
+			MatchTime:          matchTime,
+			GroupName:          groupName,
+			Venue:              venue,
+			MatchNumber:        &matchNum,
+			TheSportsDBEventID: &eventID,
+			TheSportsDBHomeID:  &homeTeamID,
+			TheSportsDBAwayID:  &awayTeamID,
 		})
 		if err != nil {
-			return imported, err
+			return imported, fmt.Errorf("evento %s: %w", eventID, err)
 		}
 		imported++
-	}
-
-	if err := ensureFirstRoundActive(ctx, tx); err != nil {
-		return imported, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -202,25 +201,80 @@ func (s *MatchSyncService) importOpenFootball(ctx context.Context) (int, error) 
 	return imported, nil
 }
 
-func ensureFirstRoundActive(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE rounds
-		 SET status = 'active'
-		 WHERE id = (
-		    SELECT id
-		    FROM rounds
-		    WHERE status = 'upcoming'
-		    ORDER BY number ASC
-		    LIMIT 1
-		 )
-		 AND NOT EXISTS (
-		    SELECT 1
-		    FROM rounds
-		    WHERE status = 'active'
-		 )`,
-	)
-	return err
+// theSportsDBRoundName mapeia o número de round para o nome exibido no bolão.
+func theSportsDBRoundName(roundNum int) string {
+	switch roundNum {
+	case 1:
+		return "Fase de Grupos — Rodada 1"
+	case 2:
+		return "Fase de Grupos — Rodada 2"
+	case 3:
+		return "Fase de Grupos — Rodada 3"
+	case 100:
+		return "Fase de 32"
+	case 101:
+		return "Oitavas de Final"
+	case 102:
+		return "Quartas de Final"
+	case 103:
+		return "Semifinal"
+	case 104:
+		return "Disputa de 3º Lugar"
+	case 105:
+		return "Final"
+	default:
+		return fmt.Sprintf("Rodada %d", roundNum)
+	}
 }
+
+// parseIntRound converte a string intRound do TheSportsDB para o número interno de rodada.
+func parseIntRound(raw string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n <= 0 {
+		return 900
+	}
+	// Fase de grupos: rounds 1, 2, 3
+	if n <= 3 {
+		return n
+	}
+	// Rounds de mata-mata vêm com números maiores — mapeia para constantes internas
+	// TheSportsDB tende a usar rounds 4+ para eliminatórias
+	switch n {
+	case 4:
+		return 100 // Fase de 32 (Copa 2026)
+	case 5:
+		return 101 // Oitavas
+	case 6:
+		return 102 // Quartas
+	case 7:
+		return 103 // Semi
+	case 8:
+		return 104 // 3º lugar
+	case 9:
+		return 105 // Final
+	default:
+		return n + 90 // fallback para rounds inesperados
+	}
+}
+
+func parseTheSportsDBTimestamp(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, fmt.Errorf("timestamp vazio")
+	}
+	// TheSportsDB v2 retorna timestamps UTC sem sufixo Z: "2026-06-11T19:00:00"
+	t, err := time.Parse("2006-01-02T15:04:05", raw)
+	if err != nil {
+		// Tenta com Z caso venha com sufixo
+		t, err = time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return time.Time{}, err
+		}
+	}
+	return t.UTC(), nil
+}
+
+// ==================== WorldCup26 (sync de resultados) ====================
 
 type worldCup26Response struct {
 	Games []worldCup26Game `json:"games"`
@@ -338,10 +392,7 @@ func (s *MatchSyncService) linkWorldCup26Match(ctx context.Context, matchID int,
 	if err := s.Matches.LinkWorldCup26Match(ctx, tx, matchID, worldCup26MatchID); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *MatchSyncService) getJSON(ctx context.Context, url string, dest any) error {
@@ -361,70 +412,7 @@ func (s *MatchSyncService) getJSON(ctx context.Context, url string, dest any) er
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("GET %s retornou HTTP %d", url, resp.StatusCode)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
-		return err
-	}
-	return nil
-}
-
-var openFootballTimeRE = regexp.MustCompile(`^(\d{2}):(\d{2})\s+UTC([+-]\d{1,2})$`)
-
-func parseOpenFootballTime(dateValue, timeValue string) (time.Time, error) {
-	matches := openFootballTimeRE.FindStringSubmatch(strings.TrimSpace(timeValue))
-	if len(matches) != 4 {
-		return time.Time{}, fmt.Errorf("horário inválido: %q", timeValue)
-	}
-	hour, err := strconv.Atoi(matches[1])
-	if err != nil {
-		return time.Time{}, err
-	}
-	minute, err := strconv.Atoi(matches[2])
-	if err != nil {
-		return time.Time{}, err
-	}
-	offsetHour, err := strconv.Atoi(matches[3])
-	if err != nil {
-		return time.Time{}, err
-	}
-	date, err := time.Parse("2006-01-02", dateValue)
-	if err != nil {
-		return time.Time{}, err
-	}
-
-	location := time.FixedZone(fmt.Sprintf("UTC%+d", offsetHour), offsetHour*60*60)
-	return time.Date(date.Year(), date.Month(), date.Day(), hour, minute, 0, 0, location).UTC(), nil
-}
-
-func openFootballID(match openFootballMatch) string {
-	parts := []string{match.Date, match.Time, match.Team1, match.Team2, match.Round}
-	return normalizeKey(strings.Join(parts, "|"))
-}
-
-func roundNumber(roundName string) int {
-	normalized := strings.ToLower(strings.TrimSpace(roundName))
-	if strings.HasPrefix(normalized, "matchday ") {
-		value, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(normalized, "matchday ")))
-		if err == nil {
-			return value
-		}
-	}
-
-	switch normalized {
-	case "round of 32":
-		return 100
-	case "round of 16":
-		return 101
-	case "quarter-finals", "quarterfinals":
-		return 102
-	case "semi-finals", "semifinals":
-		return 103
-	case "third-place", "third place", "third-place play-off":
-		return 104
-	case "final":
-		return 105
-	default:
-		return 900
-	}
+	return json.NewDecoder(resp.Body).Decode(dest)
 }
 
 func findWorldCup26Match(matches []repositories.MatchSyncRow, game worldCup26Game) (repositories.MatchSyncRow, bool) {

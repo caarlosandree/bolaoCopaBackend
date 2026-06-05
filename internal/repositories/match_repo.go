@@ -458,3 +458,25 @@ func (r *MatchRepository) AdjustUserPoints(ctx context.Context, tx *sql.Tx, user
 	)
 	return err
 }
+
+// ResetSchedule apaga todos os rounds e seus jogos (cascata via FK).
+// Zera total_points de todos os usuários e remove todos os palpites.
+func (r *MatchRepository) ResetSchedule(ctx context.Context) error {
+	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, q := range []string{
+		`DELETE FROM guesses`,
+		`UPDATE users SET total_points = 0`,
+		`DELETE FROM matches`,
+		`DELETE FROM rounds`,
+	} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}

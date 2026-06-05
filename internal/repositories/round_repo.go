@@ -49,6 +49,88 @@ func (r *RoundRepository) ListAll(ctx context.Context) ([]models.Round, error) {
 	return rounds, rows.Err()
 }
 
+func (r *RoundRepository) ListSummary(ctx context.Context) ([]models.RoundSummary, error) {
+	rows, err := r.DB.QueryContext(ctx,
+		`SELECT r.id, r.tournament_id, r.number, r.name, r.status,
+		        COUNT(m.id) AS match_count,
+		        MIN(m.match_time) AS first_match_at,
+		        MAX(m.match_time) AS last_match_at
+		 FROM rounds r
+		 LEFT JOIN matches m ON m.round_id = r.id
+		 GROUP BY r.id
+		 ORDER BY r.number ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var rounds []models.RoundSummary
+	for rows.Next() {
+		var s models.RoundSummary
+		var firstAt, lastAt sql.NullTime
+		if err := rows.Scan(&s.ID, &s.TournamentID, &s.Number, &s.Name, &s.Status,
+			&s.MatchCount, &firstAt, &lastAt); err != nil {
+			return nil, err
+		}
+		if firstAt.Valid {
+			s.FirstMatchAt = &firstAt.Time
+		}
+		if lastAt.Valid {
+			s.LastMatchAt = &lastAt.Time
+		}
+		rounds = append(rounds, s)
+	}
+	return rounds, rows.Err()
+}
+
+func (r *RoundRepository) FindByID(ctx context.Context, roundID int) (*models.Round, error) {
+	var round models.Round
+	err := r.DB.QueryRowContext(ctx,
+		`SELECT id, tournament_id, number, name, status, created_at
+		 FROM rounds WHERE id = $1`,
+		roundID,
+	).Scan(&round.ID, &round.TournamentID, &round.Number, &round.Name, &round.Status, &round.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &round, nil
+}
+
+func (r *RoundRepository) ActivateDueRounds(ctx context.Context) (int, error) {
+	res, err := r.DB.ExecContext(ctx,
+		`UPDATE rounds SET status = 'active'
+		 WHERE status = 'upcoming'
+		   AND id IN (
+		       SELECT round_id FROM matches
+		       GROUP BY round_id
+		       HAVING MIN(match_time) <= NOW() + INTERVAL '24 hours'
+		   )`,
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+func (r *RoundRepository) FinishCompletedRounds(ctx context.Context) (int, error) {
+	res, err := r.DB.ExecContext(ctx,
+		`UPDATE rounds SET status = 'finished'
+		 WHERE status = 'active'
+		   AND id NOT IN (
+		       SELECT round_id FROM matches
+		       WHERE status <> 'finished'
+		   )
+		   AND id IN (SELECT round_id FROM matches)`,
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 func (r *RoundRepository) FindMatchesByRound(ctx context.Context, roundID, userID int) ([]models.Match, error) {
 	rows, err := r.DB.QueryContext(ctx,
 		`SELECT m.id, m.round_id, m.home_team, m.away_team,

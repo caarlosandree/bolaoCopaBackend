@@ -14,8 +14,6 @@ import (
 	"backend/internal/repositories"
 )
 
-const theSportsDBSource = "thesportsdb"
-
 type MatchDetailsSyncService struct {
 	DB            *sql.DB
 	Matches       *repositories.MatchRepository
@@ -171,9 +169,6 @@ func (s *MatchDetailsSyncService) SyncSchedule(ctx context.Context) (int, error)
 			return imported, err
 		}
 		imported++
-	}
-	if err := ensureFirstRoundActive(ctx, tx); err != nil {
-		return imported, err
 	}
 	if err := tx.Commit(); err != nil {
 		return imported, err

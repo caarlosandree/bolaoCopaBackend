@@ -66,8 +66,8 @@ func main() {
 	userH := handlers.NewUserHandler(userRepo, cfg.BaseURL)
 	matchDetailsH := handlers.NewMatchDetailsHandler(matchDetailsRepo)
 
-	matchSync := services.NewMatchSyncService(database, matchRepo, scoreSvc, logger, cfg.OpenFootballURL, cfg.WorldCup26BaseURL)
 	theSportsDBClient := services.NewTheSportsDBClient(cfg.TheSportsDBBaseURL, cfg.TheSportsDBAPIKey)
+	matchSync := services.NewMatchSyncService(database, matchRepo, roundRepo, scoreSvc, theSportsDBClient, cfg.TheSportsDBLeagueID, cfg.TheSportsDBSeason, logger, cfg.WorldCup26BaseURL)
 	oddsClient := services.NewOddsAPIClient(cfg.OddsAPIBaseURL, cfg.OddsAPIKey)
 	matchDetailsSync := services.NewMatchDetailsSyncService(
 		database,
@@ -142,7 +142,9 @@ func main() {
 
 	protected := api.Group("")
 	protected.Use(jwtmw.JWTAuth(cfg.JWTSecret))
+	protected.GET("/rounds", roundH.ListSummary)
 	protected.GET("/rounds/active", roundH.GetActiveRound)
+	protected.GET("/rounds/:id", roundH.GetByID)
 	protected.POST("/guesses", guessH.SaveGuess)
 	protected.GET("/matches/:id/details", matchDetailsH.GetByMatchID)
 	protected.GET("/me", userH.GetMe)
@@ -156,6 +158,7 @@ func main() {
 	admin.POST("/matches/:id/score", adminH.UpdateMatchScore)
 	admin.POST("/sync/schedule", syncH.SyncSchedule)
 	admin.POST("/sync/results", syncH.SyncResults)
+	admin.POST("/sync/reset-schedule", syncH.ResetSchedule)
 	admin.POST("/sync/match-details", syncH.SyncMatchDetails)
 	admin.POST("/sync/matches/:id/details", syncH.SyncOneMatchDetails)
 	admin.GET("/matches/recent", syncH.ListRecentMatches)

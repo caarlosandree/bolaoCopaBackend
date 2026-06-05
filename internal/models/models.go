@@ -31,6 +31,18 @@ type Round struct {
 	CreatedAt    time.Time `json:"created_at" db:"created_at"`
 }
 
+// RoundSummary é usado na listagem de rodadas com agregações de partidas.
+type RoundSummary struct {
+	ID           int        `json:"id"`
+	TournamentID int        `json:"tournament_id"`
+	Number       int        `json:"number"`
+	Name         string     `json:"name"`
+	Status       string     `json:"status"`
+	MatchCount   int        `json:"match_count"`
+	FirstMatchAt *time.Time `json:"first_match_at"`
+	LastMatchAt  *time.Time `json:"last_match_at"`
+}
+
 // Match representa uma partida real do campeonato.
 type Match struct {
 	ID                 int        `json:"id" db:"id"`

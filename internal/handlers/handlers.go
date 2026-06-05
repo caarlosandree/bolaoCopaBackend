@@ -148,14 +148,52 @@ func (h *RoundHandler) GetActiveRound(c *echo.Context) error {
 }
 
 func (h *RoundHandler) ListAll(c *echo.Context) error {
-	rounds, err := h.Rounds.ListAll(c.Request().Context())
+	rounds, err := h.Rounds.ListSummary(c.Request().Context())
 	if err != nil {
 		return respond.InternalError(c, "erro ao buscar rodadas")
 	}
 	if rounds == nil {
-		rounds = []models.Round{}
+		rounds = []models.RoundSummary{}
 	}
 	return c.JSON(http.StatusOK, rounds)
+}
+
+func (h *RoundHandler) ListSummary(c *echo.Context) error {
+	rounds, err := h.Rounds.ListSummary(c.Request().Context())
+	if err != nil {
+		return respond.InternalError(c, "erro ao buscar rodadas")
+	}
+	if rounds == nil {
+		rounds = []models.RoundSummary{}
+	}
+	return c.JSON(http.StatusOK, rounds)
+}
+
+func (h *RoundHandler) GetByID(c *echo.Context) error {
+	userID, _ := c.Get("userID").(int)
+
+	roundID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		return respond.Error(c, http.StatusBadRequest, "ID de rodada inválido")
+	}
+
+	round, err := h.Rounds.FindByID(c.Request().Context(), roundID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return respond.Error(c, http.StatusNotFound, "rodada não encontrada")
+		}
+		return respond.InternalError(c, "erro ao buscar rodada")
+	}
+
+	matches, err := h.Rounds.FindMatchesByRound(c.Request().Context(), round.ID, userID)
+	if err != nil {
+		return respond.InternalError(c, "erro ao buscar partidas")
+	}
+	if matches == nil {
+		matches = []models.Match{}
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{"round": round, "matches": matches})
 }
 
 // ==========================================
@@ -401,6 +439,21 @@ func (h *SyncHandler) SyncOneMatchDetails(c *echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":  "detalhes da partida sincronizados",
 		"match_id": matchID,
+	})
+}
+
+func (h *SyncHandler) ResetSchedule(c *echo.Context) error {
+	ctx := c.Request().Context()
+	if err := h.Matches.ResetSchedule(ctx); err != nil {
+		return respond.InternalError(c, "falha ao resetar calendário: "+err.Error())
+	}
+	imported, err := h.Sync.SyncSchedule(ctx)
+	if err != nil {
+		return respond.Error(c, http.StatusBadGateway, "reset ok, mas reimportação falhou: "+err.Error())
+	}
+	return c.JSON(http.StatusOK, map[string]any{
+		"message":  "calendário resetado e reimportado",
+		"imported": imported,
 	})
 }
 
