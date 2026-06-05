@@ -131,6 +131,21 @@ func (r *RoundRepository) FinishCompletedRounds(ctx context.Context) (int, error
 	return int(n), nil
 }
 
+func (r *RoundRepository) SetStatus(ctx context.Context, roundID int, status string) error {
+	res, err := r.DB.ExecContext(ctx,
+		`UPDATE rounds SET status = $1 WHERE id = $2`,
+		status, roundID,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (r *RoundRepository) FindMatchesByRound(ctx context.Context, roundID, userID int) ([]models.Match, error) {
 	rows, err := r.DB.QueryContext(ctx,
 		`SELECT m.id, m.round_id, m.home_team, m.away_team,

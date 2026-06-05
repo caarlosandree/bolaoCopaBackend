@@ -196,6 +196,20 @@ func (h *RoundHandler) GetByID(c *echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{"round": round, "matches": matches})
 }
 
+func (h *RoundHandler) Activate(c *echo.Context) error {
+	roundID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		return respond.Error(c, http.StatusBadRequest, "ID de rodada inválido")
+	}
+	if err := h.Rounds.SetStatus(c.Request().Context(), roundID, "active"); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return respond.Error(c, http.StatusNotFound, "rodada não encontrada")
+		}
+		return respond.InternalError(c, "erro ao ativar rodada")
+	}
+	return c.JSON(http.StatusOK, map[string]any{"message": "rodada ativada", "round_id": roundID})
+}
+
 // ==========================================
 // 3. GUESS HANDLER
 // ==========================================
@@ -451,9 +465,22 @@ func (h *SyncHandler) ResetSchedule(c *echo.Context) error {
 	if err != nil {
 		return respond.Error(c, http.StatusBadGateway, "reset ok, mas reimportação falhou: "+err.Error())
 	}
+	detailsSummary := map[string]any{"skipped": true}
+	if h.DetailsSync != nil {
+		summary, detailsErr := h.DetailsSync.SyncAll(ctx)
+		if detailsErr == nil {
+			detailsSummary = map[string]any{
+				"schedule_imported": summary.ScheduleImported,
+				"details_updated":   summary.DetailsUpdated,
+				"odds_linked":       summary.OddsLinked,
+				"failures":          len(summary.Failures),
+			}
+		}
+	}
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":  "calendário resetado e reimportado",
 		"imported": imported,
+		"details":  detailsSummary,
 	})
 }
 
