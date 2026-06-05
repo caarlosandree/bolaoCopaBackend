@@ -10,6 +10,7 @@ type User struct {
 	PasswordHash string    `json:"-" db:"password_hash"` // Oculto no JSON para segurança
 	Role         string    `json:"role" db:"role"`       // "admin" ou "user"
 	TotalPoints  int       `json:"total_points" db:"total_points"`
+	AvatarURL    *string   `json:"avatar_url" db:"avatar_url"`
 	CreatedAt    time.Time `json:"created_at" db:"created_at"`
 }
 
@@ -71,9 +72,10 @@ type Guess struct {
 
 // Ranking representa uma entrada de linha na tabela de classificação geral.
 type Ranking struct {
-	Position    int    `json:"position"`
-	UserID      int    `json:"user_id"`
-	Name        string `json:"name"`
-	Email       string `json:"email"`
-	TotalPoints int    `json:"total_points"`
+	Position    int     `json:"position"`
+	UserID      int     `json:"user_id"`
+	Name        string  `json:"name"`
+	Email       string  `json:"email"`
+	TotalPoints int     `json:"total_points"`
+	AvatarURL   *string `json:"avatar_url"`
 }

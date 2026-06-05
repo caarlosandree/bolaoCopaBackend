@@ -62,6 +62,7 @@ func main() {
 	guessH := handlers.NewGuessHandler(guessRepo, matchRepo)
 	rankH := handlers.NewRankingHandler(userRepo)
 	adminH := handlers.NewAdminHandler(guessRepo, matchRepo, scoreSvc, auditSvc, userRepo)
+	userH := handlers.NewUserHandler(userRepo, cfg.BaseURL)
 
 	matchSync := services.NewMatchSyncService(database, matchRepo, scoreSvc, logger, cfg.OpenFootballURL, cfg.WorldCup26BaseURL)
 	syncH := handlers.NewSyncHandler(matchSync, matchRepo)
@@ -103,8 +104,11 @@ func main() {
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"http://localhost:3000"},
 		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
-		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete},
+		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch},
 	}))
+
+	// Servir avatares enviados pelos usuários
+	e.Static("/uploads", "uploads")
 
 	e.GET("/health", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -121,6 +125,8 @@ func main() {
 	protected.Use(jwtmw.JWTAuth(cfg.JWTSecret))
 	protected.GET("/rounds/active", roundH.GetActiveRound)
 	protected.POST("/guesses", guessH.SaveGuess)
+	protected.GET("/me", userH.GetMe)
+	protected.POST("/me/avatar", userH.UploadAvatar)
 
 	admin := api.Group("/admin")
 	admin.Use(jwtmw.JWTAuth(cfg.JWTSecret))

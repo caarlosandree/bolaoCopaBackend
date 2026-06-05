@@ -26,6 +26,7 @@ type Config struct {
 	MatchResultCheckAfterMinutes int
 	OpenFootballURL              string
 	WorldCup26BaseURL            string
+	BaseURL                      string
 }
 
 func Load() (*Config, error) {
@@ -49,6 +50,7 @@ func Load() (*Config, error) {
 	cfg.MatchResultCheckAfterMinutes = getenvIntDefault("MATCH_RESULT_CHECK_AFTER_MINUTES", 120)
 	cfg.OpenFootballURL = getenvDefault("OPENFOOTBALL_WORLD_CUP_URL", "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json")
 	cfg.WorldCup26BaseURL = strings.TrimRight(getenvDefault("WORLDCUP26_BASE_URL", "https://worldcup26.ir"), "/")
+	cfg.BaseURL = strings.TrimRight(getenvDefault("BASE_URL", "http://localhost:1323"), "/")
 
 	if cfg.JWTSecret == "" {
 		return nil, fmt.Errorf("JWT_SECRET não definido no .env")

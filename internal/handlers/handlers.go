@@ -3,8 +3,13 @@ package handlers
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"backend/internal/audit"
@@ -359,6 +364,88 @@ func (h *SyncHandler) ListRecentMatches(c *echo.Context) error {
 		matches = []repositories.RecentMatch{}
 	}
 	return c.JSON(http.StatusOK, matches)
+}
+
+// ==========================================
+// 7. USER HANDLER (perfil / avatar)
+// ==========================================
+
+const (
+	maxAvatarSize = 5 << 20 // 5 MB
+	uploadsDir    = "uploads/avatars"
+)
+
+var allowedAvatarTypes = map[string]string{
+	"image/jpeg": ".jpg",
+	"image/png":  ".png",
+	"image/webp": ".webp",
+}
+
+type UserHandler struct {
+	Users   *repositories.UserRepository
+	BaseURL string
+}
+
+func NewUserHandler(users *repositories.UserRepository, baseURL string) *UserHandler {
+	return &UserHandler{Users: users, BaseURL: baseURL}
+}
+
+func (h *UserHandler) GetMe(c *echo.Context) error {
+	userID, _ := c.Get("userID").(int)
+	user, err := h.Users.FindByID(c.Request().Context(), userID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return respond.Error(c, http.StatusNotFound, "usuário não encontrado")
+		}
+		return respond.InternalError(c, "erro interno")
+	}
+	user.PasswordHash = ""
+	return c.JSON(http.StatusOK, user)
+}
+
+func (h *UserHandler) UploadAvatar(c *echo.Context) error {
+	userID, _ := c.Get("userID").(int)
+
+	if err := c.Request().ParseMultipartForm(maxAvatarSize); err != nil {
+		return respond.Error(c, http.StatusBadRequest, "arquivo muito grande (máx 5 MB)")
+	}
+
+	file, header, err := c.Request().FormFile("avatar")
+	if err != nil {
+		return respond.Error(c, http.StatusBadRequest, "campo 'avatar' obrigatório")
+	}
+	defer file.Close()
+
+	// Detecta o Content-Type pelo cabeçalho MIME
+	contentType := header.Header.Get("Content-Type")
+	ext, ok := allowedAvatarTypes[contentType]
+	if !ok {
+		return respond.Error(c, http.StatusUnprocessableEntity, "formato não suportado (jpeg, png ou webp)")
+	}
+
+	if err := os.MkdirAll(uploadsDir, 0o755); err != nil {
+		return respond.InternalError(c, "erro ao criar diretório de uploads")
+	}
+
+	filename := fmt.Sprintf("%d%s", userID, ext)
+	destPath := filepath.Join(uploadsDir, filename)
+
+	dst, err := os.Create(destPath)
+	if err != nil {
+		return respond.InternalError(c, "erro ao salvar arquivo")
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, file); err != nil {
+		return respond.InternalError(c, "erro ao salvar arquivo")
+	}
+
+	avatarURL := strings.TrimRight(h.BaseURL, "/") + "/uploads/avatars/" + filename
+	if err := h.Users.UpdateAvatarURL(c.Request().Context(), userID, avatarURL); err != nil {
+		return respond.InternalError(c, "erro ao atualizar avatar")
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"avatar_url": avatarURL})
 }
 
 func actorUserID(c *echo.Context) *int {
