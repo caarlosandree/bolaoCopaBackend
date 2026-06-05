@@ -184,7 +184,7 @@ func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx
 		    LIMIT 1
 		 )
 		 UPDATE matches
-		 SET group_name = $1,
+		 SET group_name = COALESCE($1, group_name),
 		     venue = COALESCE($2, venue),
 		     match_number = COALESCE($3, match_number),
 		     thesportsdb_event_id = COALESCE(thesportsdb_event_id, $4),
