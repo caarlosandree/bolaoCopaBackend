@@ -18,9 +18,9 @@ backend/
 │   ├── config/      # Configurações
 │   ├── db/          # Conexão com banco de dados
 │   ├── handlers/    # Handlers HTTP
+│   ├── migrations/  # Runner e SQLs de migrations embutidas
 │   ├── middleware/  # Middleware (JWT, CORS)
 │   └── repositories/ # Repositórios de dados
-├── migrations/      # Migrations do banco de dados
 ├── main.go          # Entry point
 ├── database.sql     # Schema do banco de dados (legado)
 └── go.mod           # Dependências Go
@@ -37,43 +37,37 @@ DB_USER=postgres
 DB_PASSWORD=your_password
 DB_NAME=bolao_copa
 JWT_SECRET=your_jwt_secret
+MATCH_SYNC_ENABLED=true
+MATCH_RESULT_CHECK_AFTER_MINUTES=120
+MATCH_RESULT_RETRY_MINUTES=15
+OPENFOOTBALL_WORLD_CUP_URL=https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json
+WORLDCUP26_BASE_URL=https://worldcup26.ir
 ```
 
-2. Instale a ferramenta de migrations (golang-migrate):
+O sync importa a tabela base pelo OpenFootball uma vez ao iniciar o backend. A API
+worldcup26.ir só é consultada para resultados quando existir partida local que já passou
+do tempo esperado de término (`match_time + MATCH_RESULT_CHECK_AFTER_MINUTES`). Depois
+desse ponto, enquanto a partida ainda não estiver finalizada, o backend tenta novamente
+a cada `MATCH_RESULT_RETRY_MINUTES`.
+
+Quando uma partida aparece como finalizada na API, o placar é gravado e os pontos dos
+palpites são recalculados automaticamente. Se ainda não existir nenhuma rodada ativa, a
+primeira rodada importada é marcada como `active`.
+
+2. Execute o servidor. As migrations em `internal/migrations/sql/*.up.sql` são
+   aplicadas automaticamente no startup:
 
 ```bash
-go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
-```
-
-3. Execute as migrations para criar o banco de dados:
-
-```bash
-# Subir migrations (criar tabelas)
-migrate -path migrations -database "postgres://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME?sslmode=disable" up
-
-# Desfazer última migration
-migrate -path migrations -database "postgres://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME?sslmode=disable" down
-
-# Verificar versão atual
-migrate -path migrations -database "postgres://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME?sslmode=disable" version
+go run main.go
 ```
 
 ## Criando Novas Migrations
 
-Para criar uma nova migration:
+Crie um arquivo `.up.sql` em `internal/migrations/sql/` seguindo a sequência
+numérica usada pelo runner:
 
 ```bash
-# Criar nova migration (substitua NOME pela descrição)
-migrate create -ext sql -dir migrations -seq NOME_DA_MIGRATION
-```
-
-Isso criará dois arquivos:
-- `NNNNNNN_NOME_DA_MIGRATION.up.sql` - SQL para aplicar a mudança
-- `NNNNNNN_NOME_DA_MIGRATION.down.sql` - SQL para reverter a mudança
-
-Exemplo:
-```bash
-migrate create -ext sql -dir migrations -seq add_user_avatar
+touch internal/migrations/sql/000004_nome_da_migration.up.sql
 ```
 
 ## Instalação

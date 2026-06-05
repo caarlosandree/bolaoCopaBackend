@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS tournaments (
     name VARCHAR(100) NOT NULL,
     active BOOLEAN DEFAULT TRUE
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tournaments_name ON tournaments(name);
 
 -- 3. Tabela de Rodadas (rounds)
 CREATE TABLE IF NOT EXISTS rounds (
@@ -46,12 +47,25 @@ CREATE TABLE IF NOT EXISTS matches (
     away_score INT DEFAULT NULL,
     status VARCHAR(20) DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'ongoing', 'finished')),
     match_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    external_source TEXT,
+    external_id TEXT,
+    worldcup26_match_id TEXT,
+    group_name VARCHAR(50),
+    venue VARCHAR(120),
+    match_number INT,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Index para buscar partidas por rodada e horário (essencial para validação de bloqueio)
 CREATE INDEX IF NOT EXISTS idx_matches_round_id ON matches(round_id);
 CREATE INDEX IF NOT EXISTS idx_matches_match_time ON matches(match_time);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_external_source_id
+    ON matches(external_source, external_id)
+    WHERE external_source IS NOT NULL AND external_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_worldcup26_match_id
+    ON matches(worldcup26_match_id)
+    WHERE worldcup26_match_id IS NOT NULL;
 
 -- 5. Tabela de Palpites (guesses)
 CREATE TABLE IF NOT EXISTS guesses (

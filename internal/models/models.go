@@ -32,16 +32,22 @@ type Round struct {
 
 // Match representa uma partida real do campeonato.
 type Match struct {
-	ID        int        `json:"id" db:"id"`
-	RoundID   int        `json:"round_id" db:"round_id"`
-	HomeTeam  string     `json:"home_team" db:"home_team"`
-	AwayTeam  string     `json:"away_team" db:"away_team"`
-	HomeScore *int       `json:"home_score" db:"home_score"` // Ponteiro para permitir null (não finalizado)
-	AwayScore *int       `json:"away_score" db:"away_score"` // Ponteiro para permitir null (não finalizado)
-	Status    string     `json:"status" db:"status"`         // "scheduled", "ongoing", "finished"
-	MatchTime time.Time  `json:"match_time" db:"match_time"`
-	CreatedAt time.Time  `json:"created_at" db:"created_at"`
-	UserGuess *UserGuess `json:"user_guess,omitempty"`       // Vinculado dinamicamente para exibição
+	ID                int        `json:"id" db:"id"`
+	RoundID           int        `json:"round_id" db:"round_id"`
+	HomeTeam          string     `json:"home_team" db:"home_team"`
+	AwayTeam          string     `json:"away_team" db:"away_team"`
+	HomeScore         *int       `json:"home_score" db:"home_score"` // Ponteiro para permitir null (não finalizado)
+	AwayScore         *int       `json:"away_score" db:"away_score"` // Ponteiro para permitir null (não finalizado)
+	Status            string     `json:"status" db:"status"`         // "scheduled", "ongoing", "finished"
+	MatchTime         time.Time  `json:"match_time" db:"match_time"`
+	GroupName         *string    `json:"group_name,omitempty" db:"group_name"`
+	Venue             *string    `json:"venue,omitempty" db:"venue"`
+	MatchNumber       *int       `json:"match_number,omitempty" db:"match_number"`
+	ExternalSource    *string    `json:"external_source,omitempty" db:"external_source"`
+	ExternalID        *string    `json:"external_id,omitempty" db:"external_id"`
+	WorldCup26MatchID *string    `json:"worldcup26_match_id,omitempty" db:"worldcup26_match_id"`
+	CreatedAt         time.Time  `json:"created_at" db:"created_at"`
+	UserGuess         *UserGuess `json:"user_guess,omitempty"` // Vinculado dinamicamente para exibição
 }
 
 // UserGuess representa dados simplificados do palpite do usuário para a partida.

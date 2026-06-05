@@ -7,6 +7,7 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"backend/internal/audit"
 	"backend/internal/config"
@@ -17,6 +18,7 @@ import (
 	"backend/internal/migrations"
 	"backend/internal/repositories"
 	"backend/internal/respond"
+	"backend/internal/services"
 
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
@@ -53,12 +55,22 @@ func main() {
 	auditRepo := audit.NewRepository(database)
 	auditSvc := audit.NewService(cfg.AuditEnabled, auditRepo, logger)
 	auditSvc.CleanupExpired(context.Background(), cfg.AuditRetentionDays)
+	scoreSvc := services.NewMatchScoreService(database, guessRepo, matchRepo)
 
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTSecret)
 	roundH := handlers.NewRoundHandler(roundRepo)
 	guessH := handlers.NewGuessHandler(guessRepo, matchRepo)
 	rankH := handlers.NewRankingHandler(userRepo)
-	adminH := handlers.NewAdminHandler(database, guessRepo, matchRepo, auditSvc)
+	adminH := handlers.NewAdminHandler(guessRepo, matchRepo, scoreSvc, auditSvc)
+
+	if cfg.MatchSyncEnabled {
+		matchSync := services.NewMatchSyncService(database, matchRepo, scoreSvc, logger, cfg.OpenFootballURL, cfg.WorldCup26BaseURL)
+		matchSync.Start(
+			context.Background(),
+			time.Duration(cfg.MatchResultRetryMinutes)*time.Minute,
+			time.Duration(cfg.MatchResultCheckAfterMinutes)*time.Minute,
+		)
+	}
 
 	e := echo.New()
 	e.Logger = logger

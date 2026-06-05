@@ -220,14 +220,14 @@ func (h *RankingHandler) GetRanking(c *echo.Context) error {
 // ==========================================
 
 type AdminHandler struct {
-	DB      *sql.DB
 	Guesses *repositories.GuessRepository
 	Matches *repositories.MatchRepository
+	Score   *services.MatchScoreService
 	Audit   *audit.Service
 }
 
-func NewAdminHandler(db *sql.DB, guesses *repositories.GuessRepository, matches *repositories.MatchRepository, auditSvc *audit.Service) *AdminHandler {
-	return &AdminHandler{DB: db, Guesses: guesses, Matches: matches, Audit: auditSvc}
+func NewAdminHandler(guesses *repositories.GuessRepository, matches *repositories.MatchRepository, score *services.MatchScoreService, auditSvc *audit.Service) *AdminHandler {
+	return &AdminHandler{Guesses: guesses, Matches: matches, Score: score, Audit: auditSvc}
 }
 
 type updateScoreRequest struct {
@@ -247,45 +247,12 @@ func (h *AdminHandler) UpdateMatchScore(c *echo.Context) error {
 	}
 
 	ctx := c.Request().Context()
-	tx, err := h.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	result, err := h.Score.UpdateFinalScore(ctx, matchID, req.HomeScore, req.AwayScore)
 	if err != nil {
-		return respond.InternalError(c, "erro ao iniciar transação")
-	}
-	defer tx.Rollback()
-
-	if err := h.Matches.UpdateScoreAndStatus(ctx, tx, matchID, req.HomeScore, req.AwayScore); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return respond.Error(c, http.StatusNotFound, "partida não encontrada")
+		}
 		return respond.InternalError(c, "erro ao atualizar placar")
-	}
-
-	guesses, err := h.Guesses.FindByMatch(ctx, tx, matchID)
-	if err != nil {
-		return respond.InternalError(c, "erro ao buscar palpites")
-	}
-
-	pointsDeltaTotal := 0
-	for _, g := range guesses {
-		newPoints := services.CalculatePoints(g.HomeGuess, g.AwayGuess, req.HomeScore, req.AwayScore)
-
-		oldPoints := 0
-		if g.PointsEarned != nil {
-			oldPoints = *g.PointsEarned
-		}
-
-		if err := h.Matches.UpdateGuessPoints(ctx, tx, g.ID, newPoints); err != nil {
-			return respond.InternalError(c, "erro ao atualizar pontos do palpite")
-		}
-
-		delta := newPoints - oldPoints
-		pointsDeltaTotal += delta
-		if delta != 0 {
-			if err := h.Matches.AdjustUserPoints(ctx, tx, g.UserID, delta); err != nil {
-				return respond.InternalError(c, "erro ao atualizar pontuação do usuário")
-			}
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return respond.InternalError(c, "erro ao confirmar transação")
 	}
 
 	if h.Audit != nil {
@@ -303,8 +270,9 @@ func (h *AdminHandler) UpdateMatchScore(c *echo.Context) error {
 			IP:           c.RealIP(),
 			UserAgent:    c.Request().UserAgent(),
 			Metadata: map[string]any{
-				"guesses_recalculated": len(guesses),
-				"points_delta_total":   pointsDeltaTotal,
+				"changed":              result.Changed,
+				"guesses_recalculated": result.GuessesRecalculated,
+				"points_delta_total":   result.PointsDeltaTotal,
 			},
 		})
 	}

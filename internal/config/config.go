@@ -10,17 +10,22 @@ import (
 )
 
 type Config struct {
-	DBHost             string
-	DBPort             string
-	DBUser             string
-	DBPassword         string
-	DBName             string
-	JWTSecret          string
-	AppEnv             string
-	LogLevel           string
-	LogFormat          string
-	AuditEnabled       bool
-	AuditRetentionDays int
+	DBHost                       string
+	DBPort                       string
+	DBUser                       string
+	DBPassword                   string
+	DBName                       string
+	JWTSecret                    string
+	AppEnv                       string
+	LogLevel                     string
+	LogFormat                    string
+	AuditEnabled                 bool
+	AuditRetentionDays           int
+	MatchSyncEnabled             bool
+	MatchResultRetryMinutes      int
+	MatchResultCheckAfterMinutes int
+	OpenFootballURL              string
+	WorldCup26BaseURL            string
 }
 
 func Load() (*Config, error) {
@@ -39,6 +44,11 @@ func Load() (*Config, error) {
 	cfg.LogFormat = getenvDefault("LOG_FORMAT", defaultLogFormat(cfg.AppEnv))
 	cfg.AuditEnabled = getenvBoolDefault("AUDIT_ENABLED", true)
 	cfg.AuditRetentionDays = getenvIntDefault("AUDIT_RETENTION_DAYS", 90)
+	cfg.MatchSyncEnabled = getenvBoolDefault("MATCH_SYNC_ENABLED", true)
+	cfg.MatchResultRetryMinutes = getenvIntDefault("MATCH_RESULT_RETRY_MINUTES", legacySyncIntervalMinutes())
+	cfg.MatchResultCheckAfterMinutes = getenvIntDefault("MATCH_RESULT_CHECK_AFTER_MINUTES", 120)
+	cfg.OpenFootballURL = getenvDefault("OPENFOOTBALL_WORLD_CUP_URL", "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json")
+	cfg.WorldCup26BaseURL = strings.TrimRight(getenvDefault("WORLDCUP26_BASE_URL", "https://worldcup26.ir"), "/")
 
 	if cfg.JWTSecret == "" {
 		return nil, fmt.Errorf("JWT_SECRET não definido no .env")
@@ -87,6 +97,26 @@ func getenvIntDefault(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func legacySyncIntervalMinutes() int {
+	minutesValue := strings.TrimSpace(os.Getenv("MATCH_SYNC_INTERVAL_MINUTES"))
+	if minutesValue != "" {
+		minutes, err := strconv.Atoi(minutesValue)
+		if err == nil && minutes > 0 {
+			return minutes
+		}
+	}
+
+	hoursValue := strings.TrimSpace(os.Getenv("MATCH_SYNC_INTERVAL_HOURS"))
+	if hoursValue == "" {
+		return 15
+	}
+	hours, err := strconv.Atoi(hoursValue)
+	if err != nil || hours <= 0 {
+		return 15
+	}
+	return hours * 60
 }
 
 func defaultLogLevel(appEnv string) string {
