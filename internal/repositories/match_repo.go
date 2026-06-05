@@ -195,7 +195,7 @@ func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx
 		     updated_at = CURRENT_TIMESTAMP
 		 FROM candidate
 		 WHERE matches.id = candidate.id
-		 RETURNING id`,
+		 RETURNING matches.id`,
 		roundID,
 		m.GroupName,
 		m.Venue,
