@@ -1,0 +1,46 @@
+# Binários compilados
+/backend
+/backend.exe
+/backend.exe~
+/backend/
+/backend.exe
+/backend.app
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Dependências
+vendor/
+
+# Arquivos de ambiente
+.env
+.env.local
+.env.*.local
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Test coverage
+*.coverprofile
+coverage.out
+coverage.html
