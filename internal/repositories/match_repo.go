@@ -167,8 +167,22 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 }
 
 func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx, m ImportedMatch) (int, error) {
-	var matchID int
+	// Se já existe um match com esse thesportsdb_event_id, retorna-o diretamente
+	// sem tentar atribuir o ID a outro match (evita violação de constraint UNIQUE).
+	var existing int
 	err := tx.QueryRowContext(ctx,
+		`SELECT id FROM matches WHERE thesportsdb_event_id = $1 LIMIT 1`,
+		m.TheSportsDBEventID,
+	).Scan(&existing)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, err
+	}
+	if existing != 0 {
+		return existing, nil
+	}
+
+	var matchID int
+	err = tx.QueryRowContext(ctx,
 		`WITH candidate AS (
 		    SELECT id
 		    FROM matches
@@ -178,7 +192,6 @@ func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx
 		      AND (
 		          thesportsdb_event_id IS NULL
 		          OR thesportsdb_event_id = $4
-		          OR external_source = $11
 		      )
 		    ORDER BY id ASC
 		    LIMIT 1
@@ -205,7 +218,6 @@ func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx
 		m.HomeTeam,
 		m.AwayTeam,
 		m.MatchTime,
-		m.ExternalSource,
 	).Scan(&matchID)
 	if err != nil {
 		if err == sql.ErrNoRows {
