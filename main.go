@@ -2,15 +2,21 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 
+	"backend/internal/audit"
 	"backend/internal/config"
 	"backend/internal/db"
 	"backend/internal/handlers"
+	"backend/internal/logging"
 	jwtmw "backend/internal/middleware"
 	"backend/internal/migrations"
 	"backend/internal/repositories"
+	"backend/internal/respond"
 
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
@@ -21,30 +27,64 @@ func main() {
 	if err != nil {
 		log.Fatalf("erro ao carregar configuração: %v", err)
 	}
+	logger := logging.New(logging.Config{
+		Env:    cfg.AppEnv,
+		Level:  cfg.LogLevel,
+		Format: cfg.LogFormat,
+	})
+	slog.SetDefault(logger)
 
 	database, err := db.Connect(cfg.DSN())
 	if err != nil {
-		log.Fatalf("erro ao conectar no banco: %v", err)
+		logger.Error("erro ao conectar no banco", "error", err)
+		return
 	}
 	defer database.Close()
 
 	if err := migrations.Run(context.Background(), database); err != nil {
-		log.Fatalf("erro ao aplicar migrations: %v", err)
+		logger.Error("erro ao aplicar migrations", "error", err)
+		return
 	}
 
 	userRepo := repositories.NewUserRepository(database)
 	roundRepo := repositories.NewRoundRepository(database)
 	guessRepo := repositories.NewGuessRepository(database)
 	matchRepo := repositories.NewMatchRepository(database)
+	auditRepo := audit.NewRepository(database)
+	auditSvc := audit.NewService(cfg.AuditEnabled, auditRepo, logger)
+	auditSvc.CleanupExpired(context.Background(), cfg.AuditRetentionDays)
 
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTSecret)
 	roundH := handlers.NewRoundHandler(roundRepo)
 	guessH := handlers.NewGuessHandler(guessRepo, matchRepo)
 	rankH := handlers.NewRankingHandler(userRepo)
-	adminH := handlers.NewAdminHandler(database, guessRepo, matchRepo)
+	adminH := handlers.NewAdminHandler(database, guessRepo, matchRepo, auditSvc)
 
 	e := echo.New()
-	e.Use(middleware.RequestLogger())
+	e.Logger = logger
+	e.HTTPErrorHandler = func(c *echo.Context, err error) {
+		status := http.StatusInternalServerError
+		message := http.StatusText(status)
+
+		var httpErr *echo.HTTPError
+		if errors.As(err, &httpErr) {
+			status = httpErr.Code
+			message = http.StatusText(status)
+			if status < http.StatusInternalServerError && httpErr.Message != "" {
+				message = fmt.Sprint(httpErr.Message)
+			}
+		}
+
+		if response, ok := c.Response().(*echo.Response); ok && response.Committed {
+			return
+		}
+		_ = respond.Error(c, status, message)
+	}
+	e.Pre(jwtmw.RequestID)
+	e.Use(jwtmw.Observability(jwtmw.ObservabilityConfig{
+		Logger: logger,
+		Audit:  auditSvc,
+	}))
 	e.Use(middleware.Recover())
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"http://localhost:3000"},
@@ -74,6 +114,6 @@ func main() {
 	admin.POST("/matches/:id/score", adminH.UpdateMatchScore)
 
 	if err := e.Start(":1323"); err != nil {
-		e.Logger.Error("servidor encerrado", "error", err)
+		logger.Error("servidor encerrado", "error", err)
 	}
 }

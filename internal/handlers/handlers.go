@@ -7,9 +7,12 @@ import (
 	"strconv"
 	"time"
 
+	"backend/internal/audit"
 	"backend/internal/middleware"
 	"backend/internal/models"
 	"backend/internal/repositories"
+	"backend/internal/requestctx"
+	"backend/internal/respond"
 	"backend/internal/services"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -51,24 +54,26 @@ type registerRequest struct {
 func (h *AuthHandler) Register(c *echo.Context) error {
 	var req registerRequest
 	if err := c.Bind(&req); err != nil || req.Name == "" || req.Email == "" || len(req.Password) < 6 {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "dados inválidos (senha mínimo 6 caracteres)"})
+		return respond.Error(c, http.StatusBadRequest, "dados inválidos (senha mínimo 6 caracteres)")
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "erro interno"})
+		return respond.InternalError(c, "erro interno")
 	}
 
 	user, err := h.Users.Create(c.Request().Context(), req.Name, req.Email, string(hash))
 	if err != nil {
-		return c.JSON(http.StatusConflict, map[string]string{"error": "e-mail já cadastrado"})
+		return respond.Error(c, http.StatusConflict, "e-mail já cadastrado")
 	}
 
 	token, err := h.generateToken(user.ID, user.Role)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "erro ao gerar token"})
+		return respond.InternalError(c, "erro ao gerar token")
 	}
 
+	c.Set("userID", user.ID)
+	c.Set("role", user.Role)
 	return c.JSON(http.StatusCreated, map[string]interface{}{"token": token, "user": user})
 }
 
@@ -80,23 +85,25 @@ type loginRequest struct {
 func (h *AuthHandler) Login(c *echo.Context) error {
 	var req loginRequest
 	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "dados inválidos"})
+		return respond.Error(c, http.StatusBadRequest, "dados inválidos")
 	}
 
 	user, err := h.Users.FindByEmail(c.Request().Context(), req.Email)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "credenciais inválidas"})
+		return respond.Error(c, http.StatusUnauthorized, "credenciais inválidas")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "credenciais inválidas"})
+		return respond.Error(c, http.StatusUnauthorized, "credenciais inválidas")
 	}
 
 	token, err := h.generateToken(user.ID, user.Role)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "erro ao gerar token"})
+		return respond.InternalError(c, "erro ao gerar token")
 	}
 
+	c.Set("userID", user.ID)
+	c.Set("role", user.Role)
 	user.PasswordHash = ""
 	return c.JSON(http.StatusOK, map[string]interface{}{"token": token, "user": user})
 }
@@ -121,12 +128,12 @@ func (h *RoundHandler) GetActiveRound(c *echo.Context) error {
 		if errors.Is(err, sql.ErrNoRows) {
 			return c.JSON(http.StatusOK, map[string]interface{}{"round": nil, "matches": []models.Match{}})
 		}
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "erro ao buscar rodada"})
+		return respond.InternalError(c, "erro ao buscar rodada")
 	}
 
 	matches, err := h.Rounds.FindMatchesByRound(c.Request().Context(), round.ID, userID)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "erro ao buscar partidas"})
+		return respond.InternalError(c, "erro ao buscar partidas")
 	}
 	if matches == nil {
 		matches = []models.Match{}
@@ -159,27 +166,27 @@ func (h *GuessHandler) SaveGuess(c *echo.Context) error {
 
 	var req saveGuessRequest
 	if err := c.Bind(&req); err != nil || req.MatchID == 0 {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "dados do palpite inválidos"})
+		return respond.Error(c, http.StatusBadRequest, "dados do palpite inválidos")
 	}
 
 	mt, err := h.Matches.FindMatchTime(c.Request().Context(), req.MatchID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return c.JSON(http.StatusNotFound, map[string]string{"error": "partida não encontrada"})
+			return respond.Error(c, http.StatusNotFound, "partida não encontrada")
 		}
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "erro interno"})
+		return respond.InternalError(c, "erro interno")
 	}
 
 	if mt.Status == "finished" || mt.Status == "ongoing" {
-		return c.JSON(http.StatusForbidden, map[string]string{"error": "partida já em andamento ou finalizada"})
+		return respond.Error(c, http.StatusForbidden, "partida já em andamento ou finalizada")
 	}
 
 	if time.Now().UTC().After(mt.MatchTime.Add(-5 * time.Minute)) {
-		return c.JSON(http.StatusForbidden, map[string]string{"error": "palpites bloqueados 5 minutos antes do início"})
+		return respond.Error(c, http.StatusForbidden, "palpites bloqueados 5 minutos antes do início")
 	}
 
 	if err := h.Guesses.Upsert(c.Request().Context(), userID, req.MatchID, req.HomeGuess, req.AwayGuess); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "erro ao salvar palpite"})
+		return respond.InternalError(c, "erro ao salvar palpite")
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "palpite salvo com sucesso"})
@@ -200,7 +207,7 @@ func NewRankingHandler(users *repositories.UserRepository) *RankingHandler {
 func (h *RankingHandler) GetRanking(c *echo.Context) error {
 	ranking, err := h.Users.GetRanking(c.Request().Context())
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "erro ao buscar ranking"})
+		return respond.InternalError(c, "erro ao buscar ranking")
 	}
 	if ranking == nil {
 		ranking = []models.Ranking{}
@@ -216,10 +223,11 @@ type AdminHandler struct {
 	DB      *sql.DB
 	Guesses *repositories.GuessRepository
 	Matches *repositories.MatchRepository
+	Audit   *audit.Service
 }
 
-func NewAdminHandler(db *sql.DB, guesses *repositories.GuessRepository, matches *repositories.MatchRepository) *AdminHandler {
-	return &AdminHandler{DB: db, Guesses: guesses, Matches: matches}
+func NewAdminHandler(db *sql.DB, guesses *repositories.GuessRepository, matches *repositories.MatchRepository, auditSvc *audit.Service) *AdminHandler {
+	return &AdminHandler{DB: db, Guesses: guesses, Matches: matches, Audit: auditSvc}
 }
 
 type updateScoreRequest struct {
@@ -230,30 +238,31 @@ type updateScoreRequest struct {
 func (h *AdminHandler) UpdateMatchScore(c *echo.Context) error {
 	matchID, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "ID de partida inválido"})
+		return respond.Error(c, http.StatusBadRequest, "ID de partida inválido")
 	}
 
 	var req updateScoreRequest
 	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "placar inválido"})
+		return respond.Error(c, http.StatusBadRequest, "placar inválido")
 	}
 
 	ctx := c.Request().Context()
 	tx, err := h.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "erro ao iniciar transação"})
+		return respond.InternalError(c, "erro ao iniciar transação")
 	}
 	defer tx.Rollback()
 
 	if err := h.Matches.UpdateScoreAndStatus(ctx, tx, matchID, req.HomeScore, req.AwayScore); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "erro ao atualizar placar"})
+		return respond.InternalError(c, "erro ao atualizar placar")
 	}
 
 	guesses, err := h.Guesses.FindByMatch(ctx, tx, matchID)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "erro ao buscar palpites"})
+		return respond.InternalError(c, "erro ao buscar palpites")
 	}
 
+	pointsDeltaTotal := 0
 	for _, g := range guesses {
 		newPoints := services.CalculatePoints(g.HomeGuess, g.AwayGuess, req.HomeScore, req.AwayScore)
 
@@ -263,19 +272,41 @@ func (h *AdminHandler) UpdateMatchScore(c *echo.Context) error {
 		}
 
 		if err := h.Matches.UpdateGuessPoints(ctx, tx, g.ID, newPoints); err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "erro ao atualizar pontos do palpite"})
+			return respond.InternalError(c, "erro ao atualizar pontos do palpite")
 		}
 
 		delta := newPoints - oldPoints
+		pointsDeltaTotal += delta
 		if delta != 0 {
 			if err := h.Matches.AdjustUserPoints(ctx, tx, g.UserID, delta); err != nil {
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "erro ao atualizar pontuação do usuário"})
+				return respond.InternalError(c, "erro ao atualizar pontuação do usuário")
 			}
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "erro ao confirmar transação"})
+		return respond.InternalError(c, "erro ao confirmar transação")
+	}
+
+	if h.Audit != nil {
+		h.Audit.Record(ctx, audit.Event{
+			RequestID:    requestctx.RequestID(c),
+			ActorUserID:  actorUserID(c),
+			ActorRole:    actorRole(c),
+			Action:       "admin.match_score.updated",
+			ResourceType: "match",
+			ResourceID:   strconv.Itoa(matchID),
+			Method:       c.Request().Method,
+			Path:         c.Request().URL.Path,
+			StatusCode:   http.StatusOK,
+			Outcome:      "success",
+			IP:           c.RealIP(),
+			UserAgent:    c.Request().UserAgent(),
+			Metadata: map[string]any{
+				"guesses_recalculated": len(guesses),
+				"points_delta_total":   pointsDeltaTotal,
+			},
+		})
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
@@ -283,4 +314,17 @@ func (h *AdminHandler) UpdateMatchScore(c *echo.Context) error {
 		"match_id": matchID,
 		"score":    map[string]int{"home": req.HomeScore, "away": req.AwayScore},
 	})
+}
+
+func actorUserID(c *echo.Context) *int {
+	userID, ok := c.Get("userID").(int)
+	if !ok {
+		return nil
+	}
+	return &userID
+}
+
+func actorRole(c *echo.Context) string {
+	role, _ := c.Get("role").(string)
+	return role
 }

@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 
+	"backend/internal/respond"
+
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v5"
 )
@@ -19,7 +21,7 @@ func JWTAuth(secret string) echo.MiddlewareFunc {
 		return func(c *echo.Context) error {
 			authHeader := c.Request().Header.Get("Authorization")
 			if !strings.HasPrefix(authHeader, "Bearer ") {
-				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "token ausente"})
+				return respond.Error(c, http.StatusUnauthorized, "token ausente")
 			}
 			tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 
@@ -28,7 +30,7 @@ func JWTAuth(secret string) echo.MiddlewareFunc {
 				return []byte(secret), nil
 			})
 			if err != nil || !token.Valid {
-				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "token inválido"})
+				return respond.Error(c, http.StatusUnauthorized, "token inválido")
 			}
 
 			c.Set("userID", claims.UserID)
@@ -42,7 +44,7 @@ func AdminOnly(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		role, _ := c.Get("role").(string)
 		if role != "admin" {
-			return c.JSON(http.StatusForbidden, map[string]string{"error": "acesso restrito a administradores"})
+			return respond.Error(c, http.StatusForbidden, "acesso restrito a administradores")
 		}
 		return next(c)
 	}
