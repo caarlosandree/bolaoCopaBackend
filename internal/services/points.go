@@ -5,7 +5,8 @@ package services
 // Regras de Negócio de Pontuação:
 // - Acertar o placar exato (Ex: Palpite 2x1, Jogo 2x1) = 5 pontos
 // - Acertar o vencedor e o saldo de gols (Ex: Palpite 3x1, Jogo 2x0) = 3 pontos
-// - Acertar apenas o vencedor ou empate errando o placar (Ex: Palpite 1x0, Jogo 3x1) = 2 pontos
+// - Acertar apenas o vencedor errando o placar (Ex: Palpite 1x0, Jogo 3x1) = 2 pontos
+// - Acertar o empate sem o placar exato (Ex: Palpite 2x2, Jogo 1x1) = 1 ponto
 // - Errar completamente o resultado = 0 pontos
 func CalculatePoints(homeGuess, awayGuess, homeScore, awayScore int) int {
 	// 1. Acerto do placar exato -> 5 pontos
@@ -40,7 +41,14 @@ func CalculatePoints(homeGuess, awayGuess, homeScore, awayScore int) int {
 		return 0
 	}
 
-	// 2. Acerto do vencedor e o saldo de gols (mas não o placar exato) -> 3 pontos
+	// 2. Empate não exato -> 1 ponto
+	// Em empates o saldo de gols é sempre 0, então precisamos de uma regra separada
+	// para não conceder 3 pontos automaticamente por qualquer empate acertado.
+	if realOutcome == 0 {
+		return 1
+	}
+
+	// 3. Acerto do vencedor e o saldo de gols (mas não o placar exato) -> 3 pontos
 	// O saldo é calculado como (gols do mandante - gols do visitante)
 	guessGD := homeGuess - awayGuess
 	realGD := homeScore - awayScore
@@ -48,6 +56,6 @@ func CalculatePoints(homeGuess, awayGuess, homeScore, awayScore int) int {
 		return 3
 	}
 
-	// 3. Acerto apenas do vencedor/empate com saldo de gols diferente -> 2 pontos
+	// 4. Acerto apenas do vencedor com saldo de gols diferente -> 2 pontos
 	return 2
 }
