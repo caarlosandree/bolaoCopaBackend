@@ -341,6 +341,15 @@ func (s *MatchSyncService) updateFromWorldCup26(ctx context.Context) (worldCup26
 			var found bool
 			match, found = findWorldCup26Match(matches, game)
 			if !found {
+				if isWorldCup26Finished(game) {
+					s.Logger.Warn(
+						"jogo finalizado não encontrado no banco — verifique nomes dos times",
+						"worldcup26_id", game.ID,
+						"home", game.HomeTeamNameEN,
+						"away", game.AwayTeamNameEN,
+						"group", game.Group,
+					)
+				}
 				summary.ScoresSkipped++
 				continue
 			}
@@ -416,22 +425,45 @@ func (s *MatchSyncService) getJSON(ctx context.Context, url string, dest any) er
 }
 
 func findWorldCup26Match(matches []repositories.MatchSyncRow, game worldCup26Game) (repositories.MatchSyncRow, bool) {
-	home := normalizeTeam(game.HomeTeamNameEN)
-	away := normalizeTeam(game.AwayTeamNameEN)
+	home := resolveTeamAlias(normalizeTeam(game.HomeTeamNameEN))
+	away := resolveTeamAlias(normalizeTeam(game.AwayTeamNameEN))
 	group := normalizeGroup(game.Group)
 
 	for _, match := range matches {
-		if normalizeTeam(match.HomeTeam) != home || normalizeTeam(match.AwayTeam) != away {
+		if resolveTeamAlias(normalizeTeam(match.HomeTeam)) != home ||
+			resolveTeamAlias(normalizeTeam(match.AwayTeam)) != away {
 			continue
 		}
-		if group == "" {
+		// team names match; accept if group is unknown on either side
+		if group == "" || match.GroupName == nil {
 			return match, true
 		}
-		if match.GroupName != nil && normalizeGroup(*match.GroupName) == group {
+		if normalizeGroup(*match.GroupName) == group {
 			return match, true
 		}
 	}
 	return repositories.MatchSyncRow{}, false
+}
+
+// resolveTeamAlias normaliza variantes de nome de seleção para uma forma canônica.
+// Necessário porque fontes diferentes (TheSportsDB, WorldCup26) usam nomes distintos
+// para os mesmos países (ex: "Korea Republic" vs "South Korea").
+func resolveTeamAlias(normalized string) string {
+	switch normalized {
+	case "korearepublic", "republicofkorea":
+		return "southkorea"
+	case "czechia":
+		return "czechrepublic"
+	case "trinidadtobago":
+		return "trinidadandtobago"
+	case "ivorycoast", "cotedivoire":
+		return "ivorycoast"
+	case "unitedstatesofamerica", "unitedstates":
+		return "usa"
+	case "democraticrepublicofthecongo", "drcongo":
+		return "congo"
+	}
+	return normalized
 }
 
 func normalizeTeam(value string) string {
