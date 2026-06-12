@@ -449,6 +449,28 @@ func (r *MatchRepository) ListAdminPage(ctx context.Context, page, pageSize int)
 	}, nil
 }
 
+func (r *MatchRepository) FindByID(ctx context.Context, matchID int) (*models.Match, error) {
+	var m models.Match
+	var homeScore, awayScore sql.NullInt32
+	err := r.DB.QueryRowContext(ctx,
+		`SELECT id, round_id, home_team, away_team, home_score, away_score, status, match_time
+		 FROM matches WHERE id = $1`,
+		matchID,
+	).Scan(&m.ID, &m.RoundID, &m.HomeTeam, &m.AwayTeam, &homeScore, &awayScore, &m.Status, &m.MatchTime)
+	if err != nil {
+		return nil, err
+	}
+	if homeScore.Valid {
+		score := int(homeScore.Int32)
+		m.HomeScore = &score
+	}
+	if awayScore.Valid {
+		score := int(awayScore.Int32)
+		m.AwayScore = &score
+	}
+	return &m, nil
+}
+
 func (r *MatchRepository) FindByIDForUpdate(ctx context.Context, tx *sql.Tx, matchID int) (*models.Match, error) {
 	var m models.Match
 	var homeScore, awayScore sql.NullInt32

@@ -84,6 +84,7 @@ func main() {
 	)
 	syncH := handlers.NewSyncHandler(matchSync, matchDetailsSync, matchRepo, auditSvc)
 	statsH := handlers.NewStatisticsHandler(statsRepo, theSportsDBClient, cfg.TheSportsDBLeagueID, cfg.TheSportsDBSeason)
+	matchGuessesH := handlers.NewMatchGuessesHandler(matchRepo, guessRepo)
 
 	if cfg.MatchSyncEnabled {
 		matchSync.Start(
@@ -132,9 +133,6 @@ func main() {
 		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch},
 	}))
 
-	// Servir avatares enviados pelos usuários
-	e.Static("/uploads", "uploads")
-
 	e.GET("/health", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -145,6 +143,7 @@ func main() {
 	api.POST("/auth/login", authH.Login)
 
 	api.GET("/ranking", rankH.GetRanking)
+	api.GET("/users/:id/avatar", userH.GetAvatar)
 
 	protected := api.Group("")
 	protected.Use(jwtmw.JWTAuth(cfg.JWTSecret))
@@ -153,6 +152,7 @@ func main() {
 	protected.GET("/rounds/:id", roundH.GetByID)
 	protected.POST("/guesses", guessH.SaveGuess)
 	protected.GET("/matches/:id/details", matchDetailsH.GetByMatchID)
+	protected.GET("/matches/:id/guesses", matchGuessesH.GetMatchGuesses)
 	protected.GET("/me", userH.GetMe)
 	protected.POST("/me/avatar", userH.UploadAvatar)
 	protected.GET("/statistics/copa", statsH.GetCopaOverview)

@@ -63,6 +63,31 @@ func (r *UserRepository) UpdateAvatarURL(ctx context.Context, id int, avatarURL 
 	return err
 }
 
+func (r *UserRepository) UpdateAvatarData(ctx context.Context, id int, data []byte, contentType, avatarURL string) error {
+	_, err := r.DB.ExecContext(ctx,
+		`UPDATE users SET avatar_data = $1, avatar_content_type = $2, avatar_url = $3 WHERE id = $4`,
+		data, contentType, avatarURL, id,
+	)
+	return err
+}
+
+func (r *UserRepository) GetAvatarData(ctx context.Context, id int) ([]byte, string, error) {
+	var data []byte
+	var ct sql.NullString
+	err := r.DB.QueryRowContext(ctx,
+		`SELECT avatar_data, avatar_content_type FROM users WHERE id = $1`,
+		id,
+	).Scan(&data, &ct)
+	if err != nil {
+		return nil, "", err
+	}
+	contentType := "image/jpeg"
+	if ct.Valid {
+		contentType = ct.String
+	}
+	return data, contentType, nil
+}
+
 func (r *UserRepository) ListAll(ctx context.Context) ([]models.User, error) {
 	rows, err := r.DB.QueryContext(ctx,
 		`SELECT id, name, email, role, total_points, avatar_url, created_at

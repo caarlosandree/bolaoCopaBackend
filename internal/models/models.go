@@ -86,6 +86,16 @@ type Guess struct {
 	CreatedAt    time.Time `json:"created_at" db:"created_at"`
 }
 
+// MatchGuessView representa o palpite de um usuário com seus dados públicos.
+type MatchGuessView struct {
+	UserID       int     `json:"user_id"`
+	Name         string  `json:"name"`
+	AvatarURL    *string `json:"avatar_url"`
+	HomeGuess    int     `json:"home_guess"`
+	AwayGuess    int     `json:"away_guess"`
+	PointsEarned *int    `json:"points_earned"`
+}
+
 // Ranking representa uma entrada de linha na tabela de classificação geral.
 type Ranking struct {
 	Position    int     `json:"position"`

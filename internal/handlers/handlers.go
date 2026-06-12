@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -608,15 +606,12 @@ func (h *MatchDetailsHandler) GetByMatchID(c *echo.Context) error {
 	return c.JSON(http.StatusOK, details.Response())
 }
 
-const (
-	maxAvatarSize = 5 << 20 // 5 MB
-	uploadsDir    = "uploads/avatars"
-)
+const maxAvatarSize = 5 << 20 // 5 MB
 
-var allowedAvatarTypes = map[string]string{
-	"image/jpeg": ".jpg",
-	"image/png":  ".png",
-	"image/webp": ".webp",
+var allowedAvatarTypes = map[string]bool{
+	"image/jpeg": true,
+	"image/png":  true,
+	"image/webp": true,
 }
 
 type UserHandler struct {
@@ -648,42 +643,148 @@ func (h *UserHandler) UploadAvatar(c *echo.Context) error {
 		return respond.Error(c, http.StatusBadRequest, "arquivo muito grande (máx 5 MB)")
 	}
 
-	file, header, err := c.Request().FormFile("avatar")
+	file, _, err := c.Request().FormFile("avatar")
 	if err != nil {
 		return respond.Error(c, http.StatusBadRequest, "campo 'avatar' obrigatório")
 	}
 	defer file.Close()
 
-	// Detecta o Content-Type pelo cabeçalho MIME
-	contentType := header.Header.Get("Content-Type")
-	ext, ok := allowedAvatarTypes[contentType]
-	if !ok {
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return respond.InternalError(c, "erro ao ler arquivo")
+	}
+
+	// Detecta o tipo pelos bytes reais do arquivo (mais confiável que o cabeçalho MIME do browser)
+	sniff := data
+	if len(sniff) > 512 {
+		sniff = sniff[:512]
+	}
+	contentType := http.DetectContentType(sniff)
+	if !allowedAvatarTypes[contentType] {
 		return respond.Error(c, http.StatusUnprocessableEntity, "formato não suportado (jpeg, png ou webp)")
 	}
 
-	if err := os.MkdirAll(uploadsDir, 0o755); err != nil {
-		return respond.InternalError(c, "erro ao criar diretório de uploads")
-	}
-
-	filename := fmt.Sprintf("%d%s", userID, ext)
-	destPath := filepath.Join(uploadsDir, filename)
-
-	dst, err := os.Create(destPath)
-	if err != nil {
-		return respond.InternalError(c, "erro ao salvar arquivo")
-	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, file); err != nil {
-		return respond.InternalError(c, "erro ao salvar arquivo")
-	}
-
-	avatarURL := strings.TrimRight(h.BaseURL, "/") + "/uploads/avatars/" + filename
-	if err := h.Users.UpdateAvatarURL(c.Request().Context(), userID, avatarURL); err != nil {
-		return respond.InternalError(c, "erro ao atualizar avatar")
+	avatarURL := fmt.Sprintf("%s/api/users/%d/avatar", strings.TrimRight(h.BaseURL, "/"), userID)
+	if err := h.Users.UpdateAvatarData(c.Request().Context(), userID, data, contentType, avatarURL); err != nil {
+		return respond.InternalError(c, "erro ao salvar avatar")
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"avatar_url": avatarURL})
+}
+
+func (h *UserHandler) GetAvatar(c *echo.Context) error {
+	userID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		return respond.Error(c, http.StatusBadRequest, "ID inválido")
+	}
+
+	data, contentType, err := h.Users.GetAvatarData(c.Request().Context(), userID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return respond.Error(c, http.StatusNotFound, "avatar não encontrado")
+		}
+		return respond.InternalError(c, "erro ao buscar avatar")
+	}
+	if len(data) == 0 {
+		return respond.Error(c, http.StatusNotFound, "avatar não encontrado")
+	}
+
+	c.Response().Header().Set("Cache-Control", "public, max-age=3600")
+	return c.Blob(http.StatusOK, contentType, data)
+}
+
+// ==========================================
+// 9. MATCH GUESSES HANDLER
+// ==========================================
+
+type MatchGuessesHandler struct {
+	Matches *repositories.MatchRepository
+	Guesses *repositories.GuessRepository
+}
+
+func NewMatchGuessesHandler(matches *repositories.MatchRepository, guesses *repositories.GuessRepository) *MatchGuessesHandler {
+	return &MatchGuessesHandler{Matches: matches, Guesses: guesses}
+}
+
+type matchGuessesResponse struct {
+	Match   matchGuessesSummary     `json:"match"`
+	Stats   matchGuessesStats       `json:"stats"`
+	Guesses []models.MatchGuessView `json:"guesses"`
+}
+
+type matchGuessesSummary struct {
+	ID        int    `json:"id"`
+	HomeTeam  string `json:"home_team"`
+	AwayTeam  string `json:"away_team"`
+	HomeScore *int   `json:"home_score"`
+	AwayScore *int   `json:"away_score"`
+	Status    string `json:"status"`
+	MatchTime string `json:"match_time"`
+}
+
+type matchGuessesStats struct {
+	Total   int `json:"total"`
+	Exact   int `json:"exact"`
+	Partial int `json:"partial"`
+	Wrong   int `json:"wrong"`
+}
+
+func (h *MatchGuessesHandler) GetMatchGuesses(c *echo.Context) error {
+	matchID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		return respond.Error(c, http.StatusBadRequest, "id inválido")
+	}
+
+	match, err := h.Matches.FindByID(c.Request().Context(), matchID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return respond.Error(c, http.StatusNotFound, "partida não encontrada")
+	}
+	if err != nil {
+		return respond.InternalError(c, "erro ao buscar partida")
+	}
+
+	lockout := match.MatchTime.Add(-10 * time.Minute)
+	if time.Now().UTC().Before(lockout) {
+		return respond.Error(c, http.StatusForbidden, "palpites bloqueados somente após o lockout")
+	}
+
+	guesses, err := h.Guesses.FindByMatchWithUsers(c.Request().Context(), matchID)
+	if err != nil {
+		return respond.InternalError(c, "erro ao buscar palpites")
+	}
+	if guesses == nil {
+		guesses = []models.MatchGuessView{}
+	}
+
+	stats := matchGuessesStats{Total: len(guesses)}
+	for _, g := range guesses {
+		if g.PointsEarned == nil {
+			stats.Wrong++
+			continue
+		}
+		switch *g.PointsEarned {
+		case 5:
+			stats.Exact++
+		case 0:
+			stats.Wrong++
+		default:
+			stats.Partial++
+		}
+	}
+
+	return c.JSON(http.StatusOK, matchGuessesResponse{
+		Match: matchGuessesSummary{
+			ID:        match.ID,
+			HomeTeam:  match.HomeTeam,
+			AwayTeam:  match.AwayTeam,
+			HomeScore: match.HomeScore,
+			AwayScore: match.AwayScore,
+			Status:    match.Status,
+			MatchTime: match.MatchTime.UTC().Format(time.RFC3339),
+		},
+		Stats:   stats,
+		Guesses: guesses,
+	})
 }
 
 func actorUserID(c *echo.Context) *int {
