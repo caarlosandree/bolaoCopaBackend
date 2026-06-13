@@ -214,21 +214,21 @@ func (s *MatchDetailsSyncService) SyncMatchDetails(ctx context.Context, match re
 		}
 		if needsLineups {
 			lineupsRaw, err := s.TheSportsDB.LookupLineupRaw(ctx, *match.TheSportsDBEventID)
-			statuses = append(statuses, sourceStatus("thesportsdb_v2", "lineups", err, hasJSON(lineupsRaw), now))
-			if err == nil && hasJSON(lineupsRaw) {
+			statuses = append(statuses, sourceStatus("thesportsdb_v2", "lineups", err, hasRealData(lineupsRaw), now))
+			if err == nil && hasRealData(lineupsRaw) {
 				lineups = lineupsRaw
 			}
 		}
 
 		statsRaw, err := s.TheSportsDB.LookupStatsRaw(ctx, *match.TheSportsDBEventID)
-		statuses = append(statuses, sourceStatus("thesportsdb_v2", "statistics", err, hasJSON(statsRaw), now))
-		if err == nil && hasJSON(statsRaw) {
+		statuses = append(statuses, sourceStatus("thesportsdb_v2", "statistics", err, hasRealData(statsRaw), now))
+		if err == nil && hasRealData(statsRaw) {
 			stats = statsRaw
 		}
 
 		timelineRaw, err := s.TheSportsDB.LookupTimelineRaw(ctx, *match.TheSportsDBEventID)
-		statuses = append(statuses, sourceStatus("thesportsdb_v2", "events", err, hasJSON(timelineRaw), now))
-		if err == nil && hasJSON(timelineRaw) {
+		statuses = append(statuses, sourceStatus("thesportsdb_v2", "events", err, hasRealData(timelineRaw), now))
+		if err == nil && hasRealData(timelineRaw) {
 			events = timelineRaw
 		}
 	}
@@ -354,4 +354,21 @@ func sourceStatus(source, section string, err error, available bool, syncedAt ti
 
 func hasJSON(value json.RawMessage) bool {
 	return len(value) > 0 && string(value) != "null"
+}
+
+// isAPIError detecta respostas de erro do TheSportsDB (ex: {"Message": "No data found"}).
+// Esses payloads passam em hasJSON mas não contêm dados reais.
+func isAPIError(raw json.RawMessage) bool {
+	var check struct {
+		Message string `json:"Message"`
+		Msg     string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &check); err != nil {
+		return false
+	}
+	return check.Message != "" || check.Msg != ""
+}
+
+func hasRealData(raw json.RawMessage) bool {
+	return hasJSON(raw) && !isAPIError(raw)
 }
