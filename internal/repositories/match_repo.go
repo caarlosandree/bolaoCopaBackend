@@ -495,7 +495,10 @@ type OngoingMatch struct {
 
 func (r *MatchRepository) FindOngoing(ctx context.Context) ([]OngoingMatch, error) {
 	rows, err := r.DB.QueryContext(ctx,
-		`SELECT id, home_team, away_team FROM matches WHERE status = 'ongoing'`,
+		`SELECT id, home_team, away_team
+		 FROM matches
+		 WHERE status = 'ongoing'
+		    OR (status = 'scheduled' AND match_time <= NOW())`,
 	)
 	if err != nil {
 		return nil, err
