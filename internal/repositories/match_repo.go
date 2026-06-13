@@ -487,6 +487,40 @@ func (r *MatchRepository) AdjustUserPoints(ctx context.Context, tx *sql.Tx, user
 	return err
 }
 
+type OngoingMatch struct {
+	ID       int
+	HomeTeam string
+	AwayTeam string
+}
+
+func (r *MatchRepository) FindOngoing(ctx context.Context) ([]OngoingMatch, error) {
+	rows, err := r.DB.QueryContext(ctx,
+		`SELECT id, home_team, away_team FROM matches WHERE status = 'ongoing'`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var matches []OngoingMatch
+	for rows.Next() {
+		var m OngoingMatch
+		if err := rows.Scan(&m.ID, &m.HomeTeam, &m.AwayTeam); err != nil {
+			return nil, err
+		}
+		matches = append(matches, m)
+	}
+	return matches, rows.Err()
+}
+
+func (r *MatchRepository) UpdateStreamURL(ctx context.Context, matchID int, streamURL *string) error {
+	_, err := r.DB.ExecContext(ctx,
+		`UPDATE matches SET stream_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+		streamURL, matchID,
+	)
+	return err
+}
+
 // ResetSchedule apaga todos os rounds e seus jogos (cascata via FK).
 // Zera total_points de todos os usuários e remove todos os palpites.
 func (r *MatchRepository) ResetSchedule(ctx context.Context) error {

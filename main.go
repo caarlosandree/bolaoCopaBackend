@@ -82,7 +82,8 @@ func main() {
 		time.Duration(cfg.MatchDetailsLineupMinutes)*time.Minute,
 		time.Duration(cfg.MatchDetailsDailyHours)*time.Hour,
 	)
-	syncH := handlers.NewSyncHandler(matchSync, matchDetailsSync, matchRepo, auditSvc)
+	youtubeSvc := services.NewYouTubeStreamService(cfg.YouTubeAPIKey, cfg.YouTubeChannelID, matchRepo, logger)
+	syncH := handlers.NewSyncHandler(matchSync, matchDetailsSync, matchRepo, auditSvc, youtubeSvc)
 	statsH := handlers.NewStatisticsHandler(statsRepo, theSportsDBClient, cfg.TheSportsDBLeagueID, cfg.TheSportsDBSeason)
 	matchGuessesH := handlers.NewMatchGuessesHandler(matchRepo, guessRepo)
 
@@ -95,6 +96,16 @@ func main() {
 	}
 	if cfg.MatchDetailsSyncEnabled {
 		matchDetailsSync.Start(context.Background())
+	}
+	if cfg.YouTubeStreamSyncEnabled {
+		go func() {
+			ticker := time.NewTicker(15 * time.Minute)
+			defer ticker.Stop()
+			youtubeSvc.Sync(context.Background())
+			for range ticker.C {
+				youtubeSvc.Sync(context.Background())
+			}
+		}()
 	}
 
 	e := echo.New()
@@ -172,6 +183,7 @@ func main() {
 	admin.POST("/sync/reset-schedule", syncH.ResetSchedule)
 	admin.POST("/sync/match-details", syncH.SyncMatchDetails)
 	admin.POST("/sync/matches/:id/details", syncH.SyncOneMatchDetails)
+	admin.POST("/sync/streams", syncH.SyncStreams)
 	admin.GET("/sync/logs", syncH.ListSyncLogs)
 	admin.GET("/matches", syncH.ListMatches)
 

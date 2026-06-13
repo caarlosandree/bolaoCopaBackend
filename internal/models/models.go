@@ -61,6 +61,7 @@ type Match struct {
 	TheSportsDBEventID *string    `json:"thesportsdb_event_id,omitempty" db:"thesportsdb_event_id"`
 	TheSportsDBHomeID  *string    `json:"thesportsdb_home_team_id,omitempty" db:"thesportsdb_home_team_id"`
 	TheSportsDBAwayID  *string    `json:"thesportsdb_away_team_id,omitempty" db:"thesportsdb_away_team_id"`
+	StreamURL          *string    `json:"stream_url,omitempty" db:"stream_url"`
 	CreatedAt          time.Time  `json:"created_at" db:"created_at"`
 	UserGuess          *UserGuess `json:"user_guess,omitempty"` // Vinculado dinamicamente para exibição
 }

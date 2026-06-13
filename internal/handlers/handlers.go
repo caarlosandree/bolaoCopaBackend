@@ -369,12 +369,13 @@ func (h *AdminHandler) GetUsers(c *echo.Context) error {
 type SyncHandler struct {
 	Sync        *services.MatchSyncService
 	DetailsSync *services.MatchDetailsSyncService
+	StreamSync  *services.YouTubeStreamService
 	Matches     *repositories.MatchRepository
 	Audit       *audit.Service
 }
 
-func NewSyncHandler(sync *services.MatchSyncService, detailsSync *services.MatchDetailsSyncService, matches *repositories.MatchRepository, auditSvc *audit.Service) *SyncHandler {
-	return &SyncHandler{Sync: sync, DetailsSync: detailsSync, Matches: matches, Audit: auditSvc}
+func NewSyncHandler(sync *services.MatchSyncService, detailsSync *services.MatchDetailsSyncService, matches *repositories.MatchRepository, auditSvc *audit.Service, streamSync *services.YouTubeStreamService) *SyncHandler {
+	return &SyncHandler{Sync: sync, DetailsSync: detailsSync, StreamSync: streamSync, Matches: matches, Audit: auditSvc}
 }
 
 func (h *SyncHandler) SyncSchedule(c *echo.Context) error {
@@ -469,6 +470,14 @@ func (h *SyncHandler) SyncOneMatchDetails(c *echo.Context) error {
 		"message":  "detalhes da partida sincronizados",
 		"match_id": matchID,
 	})
+}
+
+func (h *SyncHandler) SyncStreams(c *echo.Context) error {
+	if h.StreamSync == nil {
+		return respond.Error(c, http.StatusServiceUnavailable, "sync de streams não configurado")
+	}
+	h.StreamSync.Sync(c.Request().Context())
+	return c.JSON(http.StatusOK, map[string]any{"message": "streams sincronizados"})
 }
 
 func (h *SyncHandler) ResetSchedule(c *echo.Context) error {

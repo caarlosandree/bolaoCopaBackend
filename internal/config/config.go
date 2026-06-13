@@ -32,6 +32,9 @@ type Config struct {
 	MatchDetailsSyncEnabled      bool
 	MatchDetailsDailyHours       int
 	MatchDetailsLineupMinutes    int
+	YouTubeAPIKey                string
+	YouTubeChannelID             string
+	YouTubeStreamSyncEnabled     bool
 }
 
 func Load() (*Config, error) {
@@ -61,6 +64,9 @@ func Load() (*Config, error) {
 	cfg.MatchDetailsSyncEnabled = getenvBoolDefault("MATCH_DETAILS_SYNC_ENABLED", true)
 	cfg.MatchDetailsDailyHours = getenvIntDefault("MATCH_DETAILS_DAILY_INTERVAL_HOURS", 24)
 	cfg.MatchDetailsLineupMinutes = getenvIntDefault("MATCH_DETAILS_LINEUP_REFRESH_MINUTES", 90)
+	cfg.YouTubeAPIKey = os.Getenv("YOUTUBE_API_KEY")
+	cfg.YouTubeChannelID = os.Getenv("YOUTUBE_CHANNEL_ID")
+	cfg.YouTubeStreamSyncEnabled = getenvBoolDefault("YOUTUBE_STREAM_SYNC_ENABLED", true)
 
 	if cfg.JWTSecret == "" {
 		return nil, fmt.Errorf("JWT_SECRET não definido no .env")
