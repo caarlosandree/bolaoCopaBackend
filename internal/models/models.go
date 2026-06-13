@@ -58,11 +58,9 @@ type Match struct {
 	MatchNumber        *int       `json:"match_number,omitempty" db:"match_number"`
 	ExternalSource     *string    `json:"external_source,omitempty" db:"external_source"`
 	ExternalID         *string    `json:"external_id,omitempty" db:"external_id"`
-	WorldCup26MatchID  *string    `json:"worldcup26_match_id,omitempty" db:"worldcup26_match_id"`
 	TheSportsDBEventID *string    `json:"thesportsdb_event_id,omitempty" db:"thesportsdb_event_id"`
 	TheSportsDBHomeID  *string    `json:"thesportsdb_home_team_id,omitempty" db:"thesportsdb_home_team_id"`
 	TheSportsDBAwayID  *string    `json:"thesportsdb_away_team_id,omitempty" db:"thesportsdb_away_team_id"`
-	APIFootballID      *string    `json:"api_football_fixture_id,omitempty" db:"api_football_fixture_id"`
 	CreatedAt          time.Time  `json:"created_at" db:"created_at"`
 	UserGuess          *UserGuess `json:"user_guess,omitempty"` // Vinculado dinamicamente para exibição
 }

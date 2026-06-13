@@ -103,10 +103,10 @@ func (h *StatisticsHandler) serveJSON(c *echo.Context, key string, ttl time.Dura
 // ==========================================
 
 type copaOverviewResponse struct {
-	TotalGoals  int             `json:"total_goals"`
-	BiggestWin  *biggestWinDTO  `json:"biggest_win"`
-	TopScorer   *topScorerDTO   `json:"top_scorer"`
-	NextMatches []nextMatchDTO  `json:"next_matches"`
+	TotalGoals  int            `json:"total_goals"`
+	BiggestWin  *biggestWinDTO `json:"biggest_win"`
+	TopScorer   *topScorerDTO  `json:"top_scorer"`
+	NextMatches []nextMatchDTO `json:"next_matches"`
 }
 
 type biggestWinDTO struct {
@@ -227,7 +227,7 @@ type groupStandingsResponse struct {
 }
 
 type groupDTO struct {
-	Name  string      `json:"name"`
+	Name  string            `json:"name"`
 	Teams []teamStandingDTO `json:"teams"`
 }
 
@@ -320,18 +320,18 @@ type bracketResponse struct {
 }
 
 type bracketMatchDTO struct {
-	ID        string          `json:"id"`
-	Home      bracketTeamDTO  `json:"home"`
-	Away      bracketTeamDTO  `json:"away"`
-	Status    string          `json:"status"`
-	MatchTime string          `json:"match_time"`
-	Slot      int             `json:"slot"`
+	ID        string         `json:"id"`
+	Home      bracketTeamDTO `json:"home"`
+	Away      bracketTeamDTO `json:"away"`
+	Status    string         `json:"status"`
+	MatchTime string         `json:"match_time"`
+	Slot      int            `json:"slot"`
 }
 
 type bracketTeamDTO struct {
-	Name  string  `json:"name"`
-	Badge string  `json:"badge"`
-	Score *int    `json:"score"`
+	Name  string `json:"name"`
+	Badge string `json:"badge"`
+	Score *int   `json:"score"`
 }
 
 var knockoutRoundMap = map[string]string{
@@ -374,10 +374,14 @@ func (h *StatisticsHandler) GetBracket(c *echo.Context) error {
 
 			var homeScore, awayScore *int
 			if ev.HomeScore != nil {
-				homeScore = ev.HomeScore
+				if v, err := strconv.Atoi(*ev.HomeScore); err == nil {
+					homeScore = &v
+				}
 			}
 			if ev.AwayScore != nil {
-				awayScore = ev.AwayScore
+				if v, err := strconv.Atoi(*ev.AwayScore); err == nil {
+					awayScore = &v
+				}
 			}
 
 			status := "scheduled"
@@ -421,16 +425,16 @@ func (h *StatisticsHandler) GetBracket(c *echo.Context) error {
 // ==========================================
 
 type bolaoStatsResponse struct {
-	Overview          bolaoOverviewDTO          `json:"overview"`
-	PointsEvolution   []userEvolutionDTO        `json:"points_evolution"`
-	GuessDistribution []guessDistributionDTO    `json:"guess_distribution"`
-	AccuracyRanking   []accuracyRankingDTO      `json:"accuracy_ranking"`
+	Overview          bolaoOverviewDTO       `json:"overview"`
+	PointsEvolution   []userEvolutionDTO     `json:"points_evolution"`
+	GuessDistribution []guessDistributionDTO `json:"guess_distribution"`
+	AccuracyRanking   []accuracyRankingDTO   `json:"accuracy_ranking"`
 }
 
 type bolaoOverviewDTO struct {
-	TotalGuesses int      `json:"total_guesses"`
-	ExactHits    int      `json:"exact_hits"`
-	HitRate      float64  `json:"hit_rate"`
+	TotalGuesses int           `json:"total_guesses"`
+	ExactHits    int           `json:"exact_hits"`
+	HitRate      float64       `json:"hit_rate"`
 	BestRound    *bestRoundDTO `json:"best_round"`
 }
 
@@ -440,8 +444,8 @@ type bestRoundDTO struct {
 }
 
 type userEvolutionDTO struct {
-	User   string       `json:"user"`
-	Avatar *string      `json:"avatar_url"`
+	User   string          `json:"user"`
+	Avatar *string         `json:"avatar_url"`
 	Points []roundPointDTO `json:"points"`
 }
 
@@ -658,4 +662,3 @@ var teamToGroupMap = map[string]string{
 	"ghana":                        "Grupo L",
 	"panama":                       "Grupo L",
 }
-

@@ -24,11 +24,9 @@ type MatchTime struct {
 type ImportedMatch struct {
 	ExternalSource     string
 	ExternalID         string
-	WorldCup26MatchID  *string
 	TheSportsDBEventID *string
 	TheSportsDBHomeID  *string
 	TheSportsDBAwayID  *string
-	APIFootballID      *string
 	TournamentName     string
 	RoundNumber        int
 	RoundName          string
@@ -41,15 +39,15 @@ type ImportedMatch struct {
 }
 
 type MatchSyncRow struct {
-	ID                int
-	HomeTeam          string
-	AwayTeam          string
-	HomeScore         *int
-	AwayScore         *int
-	Status            string
-	MatchTime         time.Time
-	GroupName         *string
-	WorldCup26MatchID *string
+	ID                 int
+	HomeTeam           string
+	AwayTeam           string
+	HomeScore          *int
+	AwayScore          *int
+	Status             string
+	MatchTime          time.Time
+	GroupName          *string
+	TheSportsDBEventID *string
 }
 
 func (r *MatchRepository) FindMatchTime(ctx context.Context, matchID int) (*MatchTime, error) {
@@ -123,11 +121,10 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 	err = tx.QueryRowContext(ctx,
 		`INSERT INTO matches (
 		    round_id, home_team, away_team, match_time, status,
-		    external_source, external_id, worldcup26_match_id, group_name, venue, match_number,
-		    thesportsdb_event_id, thesportsdb_home_team_id, thesportsdb_away_team_id,
-		    api_football_fixture_id
+		    external_source, external_id, group_name, venue, match_number,
+		    thesportsdb_event_id, thesportsdb_home_team_id, thesportsdb_away_team_id
 		 )
-		 VALUES ($1, $2, $3, $4, 'scheduled', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		 VALUES ($1, $2, $3, $4, 'scheduled', $5, $6, $7, $8, $9, $10, $11, $12)
 		 ON CONFLICT (external_source, external_id)
 		 WHERE external_source IS NOT NULL AND external_id IS NOT NULL
 		 DO UPDATE SET
@@ -135,14 +132,12 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 		    home_team = EXCLUDED.home_team,
 		    away_team = EXCLUDED.away_team,
 		    match_time = EXCLUDED.match_time,
-		    worldcup26_match_id = COALESCE(matches.worldcup26_match_id, EXCLUDED.worldcup26_match_id),
 		    group_name = EXCLUDED.group_name,
 		    venue = EXCLUDED.venue,
 		    match_number = EXCLUDED.match_number,
 		    thesportsdb_event_id = COALESCE(matches.thesportsdb_event_id, EXCLUDED.thesportsdb_event_id),
 		    thesportsdb_home_team_id = COALESCE(matches.thesportsdb_home_team_id, EXCLUDED.thesportsdb_home_team_id),
 		    thesportsdb_away_team_id = COALESCE(matches.thesportsdb_away_team_id, EXCLUDED.thesportsdb_away_team_id),
-		    api_football_fixture_id = COALESCE(matches.api_football_fixture_id, EXCLUDED.api_football_fixture_id),
 		    updated_at = CURRENT_TIMESTAMP
 		 RETURNING id`,
 		roundID,
@@ -151,14 +146,12 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 		m.MatchTime,
 		m.ExternalSource,
 		m.ExternalID,
-		m.WorldCup26MatchID,
 		m.GroupName,
 		m.Venue,
 		m.MatchNumber,
 		m.TheSportsDBEventID,
 		m.TheSportsDBHomeID,
 		m.TheSportsDBAwayID,
-		m.APIFootballID,
 	).Scan(&matchID)
 	if err != nil {
 		return 0, err
@@ -203,7 +196,6 @@ func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx
 		     thesportsdb_event_id = COALESCE(thesportsdb_event_id, $4),
 		     thesportsdb_home_team_id = COALESCE(thesportsdb_home_team_id, $5),
 		     thesportsdb_away_team_id = COALESCE(thesportsdb_away_team_id, $6),
-		     api_football_fixture_id = COALESCE(api_football_fixture_id, $7),
 		     updated_at = CURRENT_TIMESTAMP
 		 FROM candidate
 		 WHERE matches.id = candidate.id
@@ -214,7 +206,6 @@ func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx
 		m.TheSportsDBEventID,
 		m.TheSportsDBHomeID,
 		m.TheSportsDBAwayID,
-		m.APIFootballID,
 		m.HomeTeam,
 		m.AwayTeam,
 		m.MatchTime,
@@ -229,22 +220,20 @@ func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx
 }
 
 type DetailsSyncMatch struct {
-	ID                   int
-	HomeTeam             string
-	AwayTeam             string
-	Status               string
-	MatchTime            time.Time
-	TheSportsDBEventID   *string
-	TheSportsDBHomeID    *string
-	TheSportsDBAwayID    *string
-	APIFootballFixtureID *string
+	ID                 int
+	HomeTeam           string
+	AwayTeam           string
+	Status             string
+	MatchTime          time.Time
+	TheSportsDBEventID *string
+	TheSportsDBHomeID  *string
+	TheSportsDBAwayID  *string
 }
 
 func (r *MatchRepository) ListForDetailsSync(ctx context.Context) ([]DetailsSyncMatch, error) {
 	rows, err := r.DB.QueryContext(ctx,
 		`SELECT id, home_team, away_team, status, match_time,
-		        thesportsdb_event_id, thesportsdb_home_team_id, thesportsdb_away_team_id,
-		        api_football_fixture_id
+		        thesportsdb_event_id, thesportsdb_home_team_id, thesportsdb_away_team_id
 		 FROM matches
 		 ORDER BY match_time ASC`,
 	)
@@ -256,7 +245,7 @@ func (r *MatchRepository) ListForDetailsSync(ctx context.Context) ([]DetailsSync
 	var matches []DetailsSyncMatch
 	for rows.Next() {
 		var m DetailsSyncMatch
-		var eventID, homeID, awayID, apiFootballID sql.NullString
+		var eventID, homeID, awayID sql.NullString
 		if err := rows.Scan(
 			&m.ID,
 			&m.HomeTeam,
@@ -266,14 +255,12 @@ func (r *MatchRepository) ListForDetailsSync(ctx context.Context) ([]DetailsSync
 			&eventID,
 			&homeID,
 			&awayID,
-			&apiFootballID,
 		); err != nil {
 			return nil, err
 		}
 		m.TheSportsDBEventID = stringPtrIfValid(eventID)
 		m.TheSportsDBHomeID = stringPtrIfValid(homeID)
 		m.TheSportsDBAwayID = stringPtrIfValid(awayID)
-		m.APIFootballFixtureID = stringPtrIfValid(apiFootballID)
 		matches = append(matches, m)
 	}
 	return matches, rows.Err()
@@ -289,7 +276,7 @@ func stringPtrIfValid(value sql.NullString) *string {
 
 func (r *MatchRepository) ListForSync(ctx context.Context) ([]MatchSyncRow, error) {
 	rows, err := r.DB.QueryContext(ctx,
-		`SELECT id, home_team, away_team, home_score, away_score, status, match_time, group_name, worldcup26_match_id
+		`SELECT id, home_team, away_team, home_score, away_score, status, match_time, group_name, thesportsdb_event_id
 		 FROM matches
 		 ORDER BY match_time ASC`,
 	)
@@ -302,7 +289,7 @@ func (r *MatchRepository) ListForSync(ctx context.Context) ([]MatchSyncRow, erro
 	for rows.Next() {
 		var m MatchSyncRow
 		var homeScore, awayScore sql.NullInt32
-		var groupName, worldCup26MatchID sql.NullString
+		var groupName, theSportsDBEventID sql.NullString
 		if err := rows.Scan(
 			&m.ID,
 			&m.HomeTeam,
@@ -312,7 +299,7 @@ func (r *MatchRepository) ListForSync(ctx context.Context) ([]MatchSyncRow, erro
 			&m.Status,
 			&m.MatchTime,
 			&groupName,
-			&worldCup26MatchID,
+			&theSportsDBEventID,
 		); err != nil {
 			return nil, err
 		}
@@ -328,9 +315,9 @@ func (r *MatchRepository) ListForSync(ctx context.Context) ([]MatchSyncRow, erro
 			value := groupName.String
 			m.GroupName = &value
 		}
-		if worldCup26MatchID.Valid {
-			value := worldCup26MatchID.String
-			m.WorldCup26MatchID = &value
+		if theSportsDBEventID.Valid {
+			value := theSportsDBEventID.String
+			m.TheSportsDBEventID = &value
 		}
 		matches = append(matches, m)
 	}
@@ -349,17 +336,6 @@ func (r *MatchRepository) HasMatchesDueForResultCheck(ctx context.Context, cutof
 		cutoff,
 	).Scan(&hasDue)
 	return hasDue, err
-}
-
-func (r *MatchRepository) LinkWorldCup26Match(ctx context.Context, tx *sql.Tx, matchID int, worldCup26MatchID string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE matches
-		 SET worldcup26_match_id = $1, updated_at = CURRENT_TIMESTAMP
-		 WHERE id = $2 AND (worldcup26_match_id IS NULL OR worldcup26_match_id = $1)`,
-		worldCup26MatchID,
-		matchID,
-	)
-	return err
 }
 
 type AdminMatch struct {

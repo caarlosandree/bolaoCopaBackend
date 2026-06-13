@@ -24,8 +24,6 @@ type Config struct {
 	MatchSyncEnabled             bool
 	MatchResultRetryMinutes      int
 	MatchResultCheckAfterMinutes int
-	OpenFootballURL              string
-	WorldCup26BaseURL            string
 	BaseURL                      string
 	TheSportsDBAPIKey            string
 	TheSportsDBBaseURL           string
@@ -55,8 +53,6 @@ func Load() (*Config, error) {
 	cfg.MatchSyncEnabled = getenvBoolDefault("MATCH_SYNC_ENABLED", true)
 	cfg.MatchResultRetryMinutes = getenvIntDefault("MATCH_RESULT_RETRY_MINUTES", legacySyncIntervalMinutes())
 	cfg.MatchResultCheckAfterMinutes = getenvIntDefault("MATCH_RESULT_CHECK_AFTER_MINUTES", 120)
-	cfg.OpenFootballURL = getenvDefault("OPENFOOTBALL_WORLD_CUP_URL", "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json")
-	cfg.WorldCup26BaseURL = strings.TrimRight(getenvDefault("WORLDCUP26_BASE_URL", "https://worldcup26.ir"), "/")
 	cfg.BaseURL = strings.TrimRight(getenvDefault("BASE_URL", "http://localhost:1323"), "/")
 	cfg.TheSportsDBAPIKey = os.Getenv("THESPORTSDB_API_KEY")
 	cfg.TheSportsDBBaseURL = strings.TrimRight(getenvDefault("THESPORTSDB_BASE_URL", "https://www.thesportsdb.com/api/v2/json"), "/")

@@ -3,10 +3,8 @@ package services
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -17,16 +15,14 @@ import (
 const theSportsDBSource = "thesportsdb"
 
 type MatchSyncService struct {
-	DB            *sql.DB
-	Matches       *repositories.MatchRepository
-	Rounds        *repositories.RoundRepository
-	Score         *MatchScoreService
-	TheSportsDB   *TheSportsDBClient
-	LeagueID      string
-	Season        string
-	HTTPClient    *http.Client
-	Logger        *slog.Logger
-	WorldCup26URL string
+	DB          *sql.DB
+	Matches     *repositories.MatchRepository
+	Rounds      *repositories.RoundRepository
+	Score       *MatchScoreService
+	TheSportsDB *TheSportsDBClient
+	LeagueID    string
+	Season      string
+	Logger      *slog.Logger
 }
 
 type MatchSyncSummary struct {
@@ -45,19 +41,16 @@ func NewMatchSyncService(
 	theSportsDB *TheSportsDBClient,
 	leagueID, season string,
 	logger *slog.Logger,
-	worldCup26BaseURL string,
 ) *MatchSyncService {
 	return &MatchSyncService{
-		DB:            db,
-		Matches:       matches,
-		Rounds:        rounds,
-		Score:         score,
-		TheSportsDB:   theSportsDB,
-		LeagueID:      leagueID,
-		Season:        season,
-		HTTPClient:    &http.Client{Timeout: 20 * time.Second},
-		Logger:        logger,
-		WorldCup26URL: strings.TrimRight(worldCup26BaseURL, "/") + "/get/games",
+		DB:          db,
+		Matches:     matches,
+		Rounds:      rounds,
+		Score:       score,
+		TheSportsDB: theSportsDB,
+		LeagueID:    leagueID,
+		Season:      season,
+		Logger:      logger,
 	}
 }
 
@@ -66,12 +59,11 @@ func (s *MatchSyncService) SyncSchedule(ctx context.Context) (int, error) {
 }
 
 func (s *MatchSyncService) SyncResults(ctx context.Context) (MatchSyncSummary, error) {
-	result, err := s.updateFromWorldCup26(ctx)
+	result, err := s.updateResultsFromTheSportsDB(ctx)
 	if err != nil {
 		return MatchSyncSummary{}, err
 	}
 	return MatchSyncSummary{
-		Linked:        result.Linked,
 		ScoresUpdated: result.ScoresUpdated,
 		ScoresSkipped: result.ScoresSkipped,
 	}, nil
@@ -123,7 +115,7 @@ func (s *MatchSyncService) runLoggedRoundTransitions(ctx context.Context) {
 }
 
 func (s *MatchSyncService) runLoggedDueResultSync(ctx context.Context, resultCheckAfter time.Duration) {
-	summary, err := s.updateDueResultsFromWorldCup26(ctx, resultCheckAfter)
+	summary, err := s.updateDueResultsFromTheSportsDB(ctx, resultCheckAfter)
 	if err != nil {
 		s.Logger.Error("sync de resultados da Copa falhou", "error", err)
 		return
@@ -133,7 +125,6 @@ func (s *MatchSyncService) runLoggedDueResultSync(ctx context.Context, resultChe
 	}
 	s.Logger.Info(
 		"sync de resultados da Copa concluído",
-		"linked", summary.Linked,
 		"scores_updated", summary.ScoresUpdated,
 		"scores_skipped", summary.ScoresSkipped,
 	)
@@ -274,34 +265,44 @@ func parseTheSportsDBTimestamp(raw string) (time.Time, error) {
 	return t.UTC(), nil
 }
 
-// ==================== WorldCup26 (sync de resultados) ====================
+// ==================== TheSportsDB (sync de resultados) ====================
 
-type worldCup26Response struct {
-	Games []worldCup26Game `json:"games"`
-}
-
-type worldCup26Game struct {
-	ID             string `json:"id"`
-	HomeScore      string `json:"home_score"`
-	AwayScore      string `json:"away_score"`
-	Group          string `json:"group"`
-	Matchday       string `json:"matchday"`
-	Finished       string `json:"finished"`
-	TimeElapsed    string `json:"time_elapsed"`
-	Type           string `json:"type"`
-	HomeTeamNameEN string `json:"home_team_name_en"`
-	AwayTeamNameEN string `json:"away_team_name_en"`
-}
-
-type worldCup26Summary struct {
+type theSportsDBResultSummary struct {
 	Checked       bool
-	Linked        int
 	ScoresUpdated int
 	ScoresSkipped int
 }
 
-func (s *MatchSyncService) updateDueResultsFromWorldCup26(ctx context.Context, resultCheckAfter time.Duration) (worldCup26Summary, error) {
-	var summary worldCup26Summary
+func theSportsDBStatusToInternal(status string) string {
+	switch strings.ToLower(status) {
+	case "ft":
+		return "finished"
+	case "1h", "ht", "2h", "et", "p", "live", "susp":
+		return "ongoing"
+	case "pst", "can":
+		return "scheduled"
+	default:
+		return "scheduled"
+	}
+}
+
+func parseTheSportsDBScore(s *string) (int, bool) {
+	if s == nil {
+		return 0, false
+	}
+	v := strings.TrimSpace(*s)
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+func (s *MatchSyncService) updateDueResultsFromTheSportsDB(ctx context.Context, resultCheckAfter time.Duration) (theSportsDBResultSummary, error) {
+	var summary theSportsDBResultSummary
 	cutoff := time.Now().UTC().Add(-resultCheckAfter)
 	hasDue, err := s.Matches.HasMatchesDueForResultCheck(ctx, cutoff)
 	if err != nil {
@@ -310,17 +311,16 @@ func (s *MatchSyncService) updateDueResultsFromWorldCup26(ctx context.Context, r
 	if !hasDue {
 		return summary, nil
 	}
-
-	summary, err = s.updateFromWorldCup26(ctx)
+	summary, err = s.updateResultsFromTheSportsDB(ctx)
 	summary.Checked = true
 	return summary, err
 }
 
-func (s *MatchSyncService) updateFromWorldCup26(ctx context.Context) (worldCup26Summary, error) {
-	var summary worldCup26Summary
-	var payload worldCup26Response
-	if err := s.getJSON(ctx, s.WorldCup26URL, &payload); err != nil {
-		return summary, err
+func (s *MatchSyncService) updateResultsFromTheSportsDB(ctx context.Context) (theSportsDBResultSummary, error) {
+	var summary theSportsDBResultSummary
+	events, _, err := s.TheSportsDB.ListLeagueSchedule(ctx, s.LeagueID, s.Season)
+	if err != nil {
+		return summary, fmt.Errorf("falha ao buscar schedule do TheSportsDB: %w", err)
 	}
 
 	matches, err := s.Matches.ListForSync(ctx)
@@ -328,126 +328,103 @@ func (s *MatchSyncService) updateFromWorldCup26(ctx context.Context) (worldCup26
 		return summary, err
 	}
 
-	byWorldCup26ID := make(map[string]repositories.MatchSyncRow)
+	byEventID := make(map[string]repositories.MatchSyncRow)
 	for _, match := range matches {
-		if match.WorldCup26MatchID != nil {
-			byWorldCup26ID[*match.WorldCup26MatchID] = match
+		if match.TheSportsDBEventID != nil {
+			byEventID[*match.TheSportsDBEventID] = match
 		}
 	}
 
-	for _, game := range payload.Games {
-		match, ok := byWorldCup26ID[game.ID]
+	for _, event := range events {
+		match, ok := byEventID[event.IDEvent]
 		if !ok {
-			var found bool
-			match, found = findWorldCup26Match(matches, game)
-			if !found {
-				if isWorldCup26Finished(game) {
-					s.Logger.Warn(
-						"jogo finalizado não encontrado no banco — verifique nomes dos times",
-						"worldcup26_id", game.ID,
-						"home", game.HomeTeamNameEN,
-						"away", game.AwayTeamNameEN,
-						"group", game.Group,
-					)
-				}
+			match, ok = s.findMatchByTeamsAndTime(matches, event)
+			if !ok {
 				summary.ScoresSkipped++
 				continue
 			}
-			if match.WorldCup26MatchID == nil {
-				if err := s.linkWorldCup26Match(ctx, match.ID, game.ID); err != nil {
-					return summary, err
-				}
-				summary.Linked++
-				id := game.ID
-				match.WorldCup26MatchID = &id
-				byWorldCup26ID[game.ID] = match
+		}
+
+		newStatus := theSportsDBStatusToInternal(event.Status)
+		homeScore, homeOK := parseTheSportsDBScore(event.HomeScore)
+		awayScore, awayOK := parseTheSportsDBScore(event.AwayScore)
+
+		// Jogo finalizado: usa UpdateFinalScore (recalcula pontos dos palpites)
+		if newStatus == "finished" && homeOK && awayOK {
+			if match.Status == "finished" && match.HomeScore != nil && match.AwayScore != nil &&
+				*match.HomeScore == homeScore && *match.AwayScore == awayScore {
+				continue
+			}
+			_, err := s.Score.UpdateFinalScore(ctx, match.ID, homeScore, awayScore)
+			if err != nil {
+				return summary, err
+			}
+			summary.ScoresUpdated++
+			continue
+		}
+
+		// Jogo em andamento ou scheduled: atualiza score/status direto se houver mudança
+		if match.Status == newStatus {
+			if !homeOK || !awayOK {
+				continue
+			}
+			if match.HomeScore != nil && match.AwayScore != nil &&
+				*match.HomeScore == homeScore && *match.AwayScore == awayScore {
+				continue
 			}
 		}
 
-		if !isWorldCup26Finished(game) {
-			continue
-		}
-
-		homeScore, err := strconv.Atoi(strings.TrimSpace(game.HomeScore))
-		if err != nil {
-			summary.ScoresSkipped++
-			continue
-		}
-		awayScore, err := strconv.Atoi(strings.TrimSpace(game.AwayScore))
-		if err != nil {
-			summary.ScoresSkipped++
-			continue
-		}
-
-		result, err := s.Score.UpdateFinalScore(ctx, match.ID, homeScore, awayScore)
-		if err != nil {
+		if err := s.updateMatchStatusAndScore(ctx, match.ID, newStatus, homeOK, awayOK, homeScore, awayScore); err != nil {
 			return summary, err
 		}
-		if result.Changed {
-			summary.ScoresUpdated++
-		}
+		summary.ScoresUpdated++
 	}
 
 	return summary, nil
 }
 
-func (s *MatchSyncService) linkWorldCup26Match(ctx context.Context, matchID int, worldCup26MatchID string) error {
-	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	if err := s.Matches.LinkWorldCup26Match(ctx, tx, matchID, worldCup26MatchID); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s *MatchSyncService) getJSON(ctx context.Context, url string, dest any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "bolao-copa/1.0")
-
-	resp, err := s.HTTPClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("GET %s retornou HTTP %d", url, resp.StatusCode)
-	}
-	return json.NewDecoder(resp.Body).Decode(dest)
-}
-
-func findWorldCup26Match(matches []repositories.MatchSyncRow, game worldCup26Game) (repositories.MatchSyncRow, bool) {
-	home := resolveTeamAlias(normalizeTeam(game.HomeTeamNameEN))
-	away := resolveTeamAlias(normalizeTeam(game.AwayTeamNameEN))
-	group := normalizeGroup(game.Group)
+func (s *MatchSyncService) findMatchByTeamsAndTime(matches []repositories.MatchSyncRow, event TheSportsDBEvent) (repositories.MatchSyncRow, bool) {
+	home := resolveTeamAlias(normalizeTeam(event.HomeTeam))
+	away := resolveTeamAlias(normalizeTeam(event.AwayTeam))
+	eventTime, _ := parseTheSportsDBTimestamp(event.Timestamp)
 
 	for _, match := range matches {
 		if resolveTeamAlias(normalizeTeam(match.HomeTeam)) != home ||
 			resolveTeamAlias(normalizeTeam(match.AwayTeam)) != away {
 			continue
 		}
-		// team names match; accept if group is unknown on either side
-		if group == "" || match.GroupName == nil {
-			return match, true
-		}
-		if normalizeGroup(*match.GroupName) == group {
+		if eventTime.IsZero() || match.MatchTime.Equal(eventTime) || match.MatchTime.Equal(eventTime.Add(24*time.Hour)) {
 			return match, true
 		}
 	}
 	return repositories.MatchSyncRow{}, false
 }
 
+func (s *MatchSyncService) updateMatchStatusAndScore(ctx context.Context, matchID int, status string, homeOK, awayOK bool, homeScore, awayScore int) error {
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if homeOK && awayOK {
+		_, err = tx.ExecContext(ctx,
+			`UPDATE matches SET status = $1, home_score = $2, away_score = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4`,
+			status, homeScore, awayScore, matchID,
+		)
+	} else {
+		_, err = tx.ExecContext(ctx,
+			`UPDATE matches SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+			status, matchID,
+		)
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // resolveTeamAlias normaliza variantes de nome de seleção para uma forma canônica.
-// Necessário porque fontes diferentes (TheSportsDB, WorldCup26) usam nomes distintos
-// para os mesmos países (ex: "Korea Republic" vs "South Korea").
 func resolveTeamAlias(normalized string) string {
 	switch normalized {
 	case "korearepublic", "republicofkorea":
@@ -497,10 +474,4 @@ func emptyStringToNil(value string) *string {
 		return nil
 	}
 	return &value
-}
-
-func isWorldCup26Finished(game worldCup26Game) bool {
-	return strings.EqualFold(game.Finished, "true") ||
-		strings.EqualFold(game.Finished, "finished") ||
-		strings.EqualFold(game.TimeElapsed, "finished")
 }

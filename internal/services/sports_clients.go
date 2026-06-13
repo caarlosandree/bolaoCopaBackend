@@ -17,30 +17,30 @@ type TheSportsDBClient struct {
 }
 
 type TheSportsDBEvent struct {
-	IDEvent       string `json:"idEvent"`
-	IDAPIFootball string `json:"idAPIfootball"`
-	Season        string `json:"strSeason"`
-	League        string `json:"strLeague"`
-	HomeTeam      string `json:"strHomeTeam"`
-	AwayTeam      string `json:"strAwayTeam"`
-	HomeTeamID    string `json:"idHomeTeam"`
-	AwayTeamID    string `json:"idAwayTeam"`
-	HomeScore     *int   `json:"intHomeScore"`
-	AwayScore     *int   `json:"intAwayScore"`
-	Round         string `json:"intRound"`
-	Timestamp     string `json:"strTimestamp"`
-	Date          string `json:"dateEvent"`
-	Time          string `json:"strTime"`
-	Group         string `json:"strGroup"`
-	Venue         string `json:"strVenue"`
-	Country       string `json:"strCountry"`
-	City          string `json:"strCity"`
-	HomeBadge     string `json:"strHomeTeamBadge"`
-	AwayBadge     string `json:"strAwayTeamBadge"`
-	Thumb         string `json:"strThumb"`
-	Poster        string `json:"strPoster"`
-	Banner        string `json:"strBanner"`
-	Status        string `json:"strStatus"`
+	IDEvent       string  `json:"idEvent"`
+	IDAPIFootball string  `json:"idAPIfootball"`
+	Season        string  `json:"strSeason"`
+	League        string  `json:"strLeague"`
+	HomeTeam      string  `json:"strHomeTeam"`
+	AwayTeam      string  `json:"strAwayTeam"`
+	HomeTeamID    string  `json:"idHomeTeam"`
+	AwayTeamID    string  `json:"idAwayTeam"`
+	HomeScore     *string `json:"intHomeScore"`
+	AwayScore     *string `json:"intAwayScore"`
+	Round         string  `json:"intRound"`
+	Timestamp     string  `json:"strTimestamp"`
+	Date          string  `json:"dateEvent"`
+	Time          string  `json:"strTime"`
+	Group         string  `json:"strGroup"`
+	Venue         string  `json:"strVenue"`
+	Country       string  `json:"strCountry"`
+	City          string  `json:"strCity"`
+	HomeBadge     string  `json:"strHomeTeamBadge"`
+	AwayBadge     string  `json:"strAwayTeamBadge"`
+	Thumb         string  `json:"strThumb"`
+	Poster        string  `json:"strPoster"`
+	Banner        string  `json:"strBanner"`
+	Status        string  `json:"strStatus"`
 }
 
 func NewTheSportsDBClient(baseURL, apiKey string) *TheSportsDBClient {

@@ -70,7 +70,7 @@ func main() {
 	matchDetailsH := handlers.NewMatchDetailsHandler(matchDetailsRepo)
 
 	theSportsDBClient := services.NewTheSportsDBClient(cfg.TheSportsDBBaseURL, cfg.TheSportsDBAPIKey)
-	matchSync := services.NewMatchSyncService(database, matchRepo, roundRepo, scoreSvc, theSportsDBClient, cfg.TheSportsDBLeagueID, cfg.TheSportsDBSeason, logger, cfg.WorldCup26BaseURL)
+	matchSync := services.NewMatchSyncService(database, matchRepo, roundRepo, scoreSvc, theSportsDBClient, cfg.TheSportsDBLeagueID, cfg.TheSportsDBSeason, logger)
 	matchDetailsSync := services.NewMatchDetailsSyncService(
 		database,
 		matchRepo,

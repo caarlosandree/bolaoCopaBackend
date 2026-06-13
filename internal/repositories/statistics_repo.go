@@ -14,8 +14,8 @@ func NewStatisticsRepository(db *sql.DB) *StatisticsRepository {
 }
 
 type CopaLocalStats struct {
-	TotalGoals  int
-	BiggestWin  *BiggestWin
+	TotalGoals int
+	BiggestWin *BiggestWin
 }
 
 type BiggestWin struct {
@@ -105,11 +105,11 @@ func (r *StatisticsRepository) GetBolaoOverview(ctx context.Context) (BolaoOverv
 }
 
 type UserRoundPoints struct {
-	UserID           int
-	Name             string
-	AvatarURL        *string
-	RoundNumber      int
-	RoundPoints      int
+	UserID      int
+	Name        string
+	AvatarURL   *string
+	RoundNumber int
+	RoundPoints int
 }
 
 func (r *StatisticsRepository) GetPointsEvolution(ctx context.Context) ([]UserRoundPoints, error) {

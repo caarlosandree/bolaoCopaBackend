@@ -135,14 +135,12 @@ func (s *MatchDetailsSyncService) SyncSchedule(ctx context.Context) (int, error)
 		eventID := emptyStringToNil(event.IDEvent)
 		homeID := emptyStringToNil(event.HomeTeamID)
 		awayID := emptyStringToNil(event.AwayTeamID)
-		apiFootballID := emptyStringToNil(event.IDAPIFootball)
 		_, err = s.Matches.UpsertImported(ctx, tx, repositories.ImportedMatch{
 			ExternalSource:     theSportsDBSource,
 			ExternalID:         event.IDEvent,
 			TheSportsDBEventID: eventID,
 			TheSportsDBHomeID:  homeID,
 			TheSportsDBAwayID:  awayID,
-			APIFootballID:      apiFootballID,
 			TournamentName:     "FIFA World Cup 2026",
 			RoundNumber:        roundNumber,
 			RoundName:          roundName,
@@ -175,7 +173,7 @@ func (s *MatchDetailsSyncService) SyncStoredMatchDetails(ctx context.Context, fo
 		if !force && match.TheSportsDBEventID == nil {
 			continue
 		}
-		if err := s.SyncMatchDetails(ctx, match); err != nil {
+		if err := s.SyncMatchDetails(ctx, match, force); err != nil {
 			failures = append(failures, fmt.Sprintf("match %d: %v", match.ID, err))
 			continue
 		}
@@ -191,13 +189,13 @@ func (s *MatchDetailsSyncService) SyncMatchByID(ctx context.Context, matchID int
 	}
 	for _, match := range matches {
 		if match.ID == matchID {
-			return s.SyncMatchDetails(ctx, match)
+			return s.SyncMatchDetails(ctx, match, true)
 		}
 	}
 	return sql.ErrNoRows
 }
 
-func (s *MatchDetailsSyncService) SyncMatchDetails(ctx context.Context, match repositories.DetailsSyncMatch) error {
+func (s *MatchDetailsSyncService) SyncMatchDetails(ctx context.Context, match repositories.DetailsSyncMatch, force bool) error {
 	now := time.Now().UTC()
 	statuses := []models.SourceStatus{}
 	var media, lineups, stats, events, form json.RawMessage
@@ -209,7 +207,12 @@ func (s *MatchDetailsSyncService) SyncMatchDetails(ctx context.Context, match re
 			media = eventRaw
 		}
 
-		if shouldRefreshLineups(match.MatchTime, now, s.LineupWindow) {
+		needsLineups := force
+		if !needsLineups {
+			hasLineups, _ := s.Details.HasLineups(ctx, match.ID)
+			needsLineups = !hasLineups && shouldRefreshLineups(match.MatchTime, now, s.LineupWindow)
+		}
+		if needsLineups {
 			lineupsRaw, err := s.TheSportsDB.LookupLineupRaw(ctx, *match.TheSportsDBEventID)
 			statuses = append(statuses, sourceStatus("thesportsdb_v2", "lineups", err, hasJSON(lineupsRaw), now))
 			if err == nil && hasJSON(lineupsRaw) {

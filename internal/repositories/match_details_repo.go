@@ -44,6 +44,21 @@ func (r *MatchDetailsRepository) FindByMatchID(ctx context.Context, matchID int)
 	return scanMatchDetails(row)
 }
 
+func (r *MatchDetailsRepository) HasLineups(ctx context.Context, matchID int) (bool, error) {
+	var has bool
+	err := r.DB.QueryRowContext(ctx,
+		`SELECT EXISTS (
+		    SELECT 1 FROM match_details
+		    WHERE match_id = $1
+		      AND lineups IS NOT NULL
+		      AND lineups != 'null'
+		      AND length(lineups::text) > 2
+		)`,
+		matchID,
+	).Scan(&has)
+	return has, err
+}
+
 func (r *MatchDetailsRepository) Upsert(ctx context.Context, d MatchDetailsUpsert) error {
 	status, err := json.Marshal(d.SourceStatus)
 	if err != nil {

@@ -40,19 +40,14 @@ JWT_SECRET=your_jwt_secret
 MATCH_SYNC_ENABLED=true
 MATCH_RESULT_CHECK_AFTER_MINUTES=120
 MATCH_RESULT_RETRY_MINUTES=15
-OPENFOOTBALL_WORLD_CUP_URL=https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json
-WORLDCUP26_BASE_URL=https://worldcup26.ir
+THESPORTSDB_API_KEY=your_api_key
 ```
 
-O sync importa a tabela base pelo OpenFootball uma vez ao iniciar o backend. A API
-worldcup26.ir só é consultada para resultados quando existir partida local que já passou
-do tempo esperado de término (`match_time + MATCH_RESULT_CHECK_AFTER_MINUTES`). Depois
-desse ponto, enquanto a partida ainda não estiver finalizada, o backend tenta novamente
-a cada `MATCH_RESULT_RETRY_MINUTES`.
-
-Quando uma partida aparece como finalizada na API, o placar é gravado e os pontos dos
-palpites são recalculados automaticamente. Se ainda não existir nenhuma rodada ativa, a
-primeira rodada importada é marcada como `active`.
+O sync de calendário e resultados usa exclusivamente a API **TheSportsDB** (fonte da
+verdade). A cada `MATCH_RESULT_RETRY_MINUTES`, o backend busca o schedule atualizado e
+atualiza placares e status (`scheduled` / `ongoing` / `finished`). Quando uma partida
+aparece como finalizada (`FT`), o placar é gravado e os pontos dos palpites são
+recalculados automaticamente.
 
 2. Execute o servidor. As migrations em `internal/migrations/sql/*.up.sql` são
    aplicadas automaticamente no startup:
