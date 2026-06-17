@@ -351,6 +351,38 @@ func (h *AdminHandler) UpdateMatchScore(c *echo.Context) error {
 	})
 }
 
+type resetPasswordRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+func (h *AdminHandler) ResetUserPassword(c *echo.Context) error {
+	var req resetPasswordRequest
+	if err := c.Bind(&req); err != nil || req.Email == "" || len(req.Password) < 6 {
+		return respond.Error(c, http.StatusBadRequest, "email e senha (mínimo 6 caracteres) obrigatórios")
+	}
+
+	user, err := h.Users.FindByEmail(c.Request().Context(), req.Email)
+	if err != nil {
+		return respond.Error(c, http.StatusNotFound, "usuário não encontrado")
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return respond.InternalError(c, "erro ao gerar hash")
+	}
+
+	if err := h.Users.UpdatePasswordHash(c.Request().Context(), user.ID, string(hash)); err != nil {
+		return respond.InternalError(c, "erro ao atualizar senha")
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"message": "senha atualizada com sucesso",
+		"user_id": user.ID,
+		"email":   user.Email,
+	})
+}
+
 func (h *AdminHandler) GetUsers(c *echo.Context) error {
 	users, err := h.Users.ListAll(c.Request().Context())
 	if err != nil {

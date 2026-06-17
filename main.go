@@ -187,6 +187,20 @@ func main() {
 	admin.GET("/sync/logs", syncH.ListSyncLogs)
 	admin.GET("/matches", syncH.ListMatches)
 
+	superadminUser := os.Getenv("SUPERADMIN_USER")
+	if superadminUser == "" {
+		superadminUser = "root"
+	}
+	superadminPass := os.Getenv("SUPERADMIN_PASS")
+	if superadminPass == "" {
+		superadminPass = "Root@1234"
+	}
+	superadmin := api.Group("/superadmin")
+	superadmin.Use(middleware.BasicAuth(func(c *echo.Context, user, pass string) (bool, error) {
+		return user == superadminUser && pass == superadminPass, nil
+	}))
+	superadmin.POST("/users/reset-password", adminH.ResetUserPassword)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "1323"

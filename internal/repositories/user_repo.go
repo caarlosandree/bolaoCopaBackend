@@ -110,6 +110,21 @@ func (r *UserRepository) ListAll(ctx context.Context) ([]models.User, error) {
 	return users, rows.Err()
 }
 
+func (r *UserRepository) UpdatePasswordHash(ctx context.Context, userID int, hash string) error {
+	res, err := r.DB.ExecContext(ctx,
+		`UPDATE users SET password_hash = $1 WHERE id = $2`,
+		hash, userID,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (r *UserRepository) GetRanking(ctx context.Context) ([]models.Ranking, error) {
 	rows, err := r.DB.QueryContext(ctx,
 		`SELECT id, name, email, total_points, avatar_url
