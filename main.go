@@ -84,8 +84,8 @@ func main() {
 	)
 	youtubeSvc := services.NewYouTubeStreamService(cfg.YouTubeAPIKey, cfg.YouTubeChannelID, matchRepo, logger)
 	syncH := handlers.NewSyncHandler(matchSync, matchDetailsSync, matchRepo, auditSvc, youtubeSvc)
-	statsH := handlers.NewStatisticsHandler(statsRepo, theSportsDBClient, cfg.TheSportsDBLeagueID, cfg.TheSportsDBSeason)
-	matchGuessesH := handlers.NewMatchGuessesHandler(matchRepo, guessRepo)
+	statsH := handlers.NewStatisticsHandler(statsRepo, userRepo, theSportsDBClient, cfg.TheSportsDBLeagueID, cfg.TheSportsDBSeason)
+	matchGuessesH := handlers.NewMatchGuessesHandler(matchRepo, guessRepo, userRepo)
 
 	if cfg.MatchSyncEnabled {
 		matchSync.Start(
@@ -153,11 +153,11 @@ func main() {
 	api.POST("/auth/register", authH.Register)
 	api.POST("/auth/login", authH.Login)
 
-	api.GET("/ranking", rankH.GetRanking)
 	api.GET("/users/:id/avatar", userH.GetAvatar)
 
 	protected := api.Group("")
 	protected.Use(jwtmw.JWTAuth(cfg.JWTSecret))
+	protected.GET("/ranking", rankH.GetRanking)
 	protected.GET("/rounds", roundH.ListSummary)
 	protected.GET("/rounds/active", roundH.GetActiveRound)
 	protected.GET("/rounds/:id", roundH.GetByID)
@@ -175,6 +175,8 @@ func main() {
 	admin.Use(jwtmw.JWTAuth(cfg.JWTSecret))
 	admin.Use(jwtmw.AdminOnly)
 	admin.GET("/users", adminH.GetUsers)
+	admin.PATCH("/users/:id/hidden", adminH.UpdateUserHidden)
+	admin.DELETE("/users/:id", adminH.DeleteUser)
 	admin.GET("/rounds", roundH.ListAll)
 	admin.POST("/rounds/:id/activate", roundH.Activate)
 	admin.POST("/matches/:id/score", adminH.UpdateMatchScore)

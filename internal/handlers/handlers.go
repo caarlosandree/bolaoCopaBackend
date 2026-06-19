@@ -271,7 +271,8 @@ func NewRankingHandler(users *repositories.UserRepository) *RankingHandler {
 }
 
 func (h *RankingHandler) GetRanking(c *echo.Context) error {
-	ranking, err := h.Users.GetRanking(c.Request().Context())
+	currentUserID, _ := c.Get("userID").(int)
+	ranking, err := h.Users.GetRanking(c.Request().Context(), currentUserID)
 	if err != nil {
 		return respond.InternalError(c, "erro ao buscar ranking")
 	}
@@ -392,6 +393,92 @@ func (h *AdminHandler) GetUsers(c *echo.Context) error {
 		users = []models.User{}
 	}
 	return c.JSON(http.StatusOK, users)
+}
+
+type updateHiddenRequest struct {
+	IsHidden bool `json:"is_hidden"`
+}
+
+func (h *AdminHandler) UpdateUserHidden(c *echo.Context) error {
+	userID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		return respond.Error(c, http.StatusBadRequest, "ID de usuário inválido")
+	}
+
+	var req updateHiddenRequest
+	if err := c.Bind(&req); err != nil {
+		return respond.Error(c, http.StatusBadRequest, "valor inválido")
+	}
+
+	if err := h.Users.UpdateIsHidden(c.Request().Context(), userID, req.IsHidden); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return respond.Error(c, http.StatusNotFound, "usuário não encontrado")
+		}
+		return respond.InternalError(c, "erro ao atualizar visibilidade")
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"message":   "visibilidade atualizada",
+		"user_id":   userID,
+		"is_hidden": req.IsHidden,
+	})
+}
+
+func (h *AdminHandler) DeleteUser(c *echo.Context) error {
+	targetID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		return respond.Error(c, http.StatusBadRequest, "ID de usuário inválido")
+	}
+
+	actorID, _ := c.Get("userID").(int)
+	if targetID == actorID {
+		return respond.Error(c, http.StatusForbidden, "não é possível excluir o próprio usuário")
+	}
+
+	ctx := c.Request().Context()
+	target, err := h.Users.FindByID(ctx, targetID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return respond.Error(c, http.StatusNotFound, "usuário não encontrado")
+		}
+		return respond.InternalError(c, "erro ao buscar usuário")
+	}
+	if target.Role == "admin" {
+		return respond.Error(c, http.StatusForbidden, "não é permitido excluir administradores")
+	}
+
+	if err := h.Users.DeleteUser(ctx, targetID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return respond.Error(c, http.StatusNotFound, "usuário não encontrado")
+		}
+		return respond.InternalError(c, "erro ao excluir usuário")
+	}
+
+	if h.Audit != nil {
+		h.Audit.Record(ctx, audit.Event{
+			RequestID:    requestctx.RequestID(c),
+			ActorUserID:  actorUserID(c),
+			ActorRole:    actorRole(c),
+			Action:       "admin.user.deleted",
+			ResourceType: "user",
+			ResourceID:   strconv.Itoa(targetID),
+			Method:       c.Request().Method,
+			Path:         c.Request().URL.Path,
+			StatusCode:   http.StatusOK,
+			Outcome:      "success",
+			IP:           c.RealIP(),
+			UserAgent:    c.Request().UserAgent(),
+			Metadata: map[string]any{
+				"deleted_email": target.Email,
+				"deleted_name":  target.Name,
+			},
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"message": "usuário excluído com sucesso",
+		"user_id": targetID,
+	})
 }
 
 // ==========================================
@@ -741,10 +828,11 @@ func (h *UserHandler) GetAvatar(c *echo.Context) error {
 type MatchGuessesHandler struct {
 	Matches *repositories.MatchRepository
 	Guesses *repositories.GuessRepository
+	Users   *repositories.UserRepository
 }
 
-func NewMatchGuessesHandler(matches *repositories.MatchRepository, guesses *repositories.GuessRepository) *MatchGuessesHandler {
-	return &MatchGuessesHandler{Matches: matches, Guesses: guesses}
+func NewMatchGuessesHandler(matches *repositories.MatchRepository, guesses *repositories.GuessRepository, users *repositories.UserRepository) *MatchGuessesHandler {
+	return &MatchGuessesHandler{Matches: matches, Guesses: guesses, Users: users}
 }
 
 type matchGuessesResponse struct {
@@ -796,6 +884,25 @@ func (h *MatchGuessesHandler) GetMatchGuesses(c *echo.Context) error {
 	if guesses == nil {
 		guesses = []models.MatchGuessView{}
 	}
+
+	currentUserID, _ := c.Get("userID").(int)
+	hiddenIDs, err := h.Users.ListHiddenUserIDs(c.Request().Context())
+	if err != nil {
+		return respond.InternalError(c, "erro ao buscar visibilidade")
+	}
+	hiddenMap := make(map[int]bool, len(hiddenIDs))
+	for _, id := range hiddenIDs {
+		hiddenMap[id] = true
+	}
+
+	filtered := make([]models.MatchGuessView, 0, len(guesses))
+	for _, g := range guesses {
+		if hiddenMap[g.UserID] && g.UserID != currentUserID {
+			continue
+		}
+		filtered = append(filtered, g)
+	}
+	guesses = filtered
 
 	stats := matchGuessesStats{Total: len(guesses)}
 	for _, g := range guesses {

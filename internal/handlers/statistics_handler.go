@@ -57,6 +57,7 @@ func (c *statisticsCache) set(key string, data []byte, ttl time.Duration) {
 
 type StatisticsHandler struct {
 	repo     *repositories.StatisticsRepository
+	users    *repositories.UserRepository
 	sdb      *services.TheSportsDBClient
 	cache    *statisticsCache
 	leagueID string
@@ -65,11 +66,13 @@ type StatisticsHandler struct {
 
 func NewStatisticsHandler(
 	repo *repositories.StatisticsRepository,
+	users *repositories.UserRepository,
 	sdb *services.TheSportsDBClient,
 	leagueID, season string,
 ) *StatisticsHandler {
 	return &StatisticsHandler{
 		repo:     repo,
+		users:    users,
 		sdb:      sdb,
 		cache:    newStatisticsCache(),
 		leagueID: leagueID,
@@ -445,6 +448,7 @@ type bestRoundDTO struct {
 
 type userEvolutionDTO struct {
 	User   string          `json:"user"`
+	UserID int             `json:"user_id"`
 	Avatar *string         `json:"avatar_url"`
 	Points []roundPointDTO `json:"points"`
 }
@@ -460,6 +464,7 @@ type guessDistributionDTO struct {
 }
 
 type accuracyRankingDTO struct {
+	UserID    int     `json:"user_id"`
 	Name      string  `json:"name"`
 	AvatarURL *string `json:"avatar_url"`
 	Exact     int     `json:"exact"`
@@ -493,6 +498,15 @@ func (h *StatisticsHandler) GetBolaoStats(c *echo.Context) error {
 			return nil, err
 		}
 
+		hiddenIDs, err := h.users.ListHiddenUserIDs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		hiddenMap := make(map[int]bool, len(hiddenIDs))
+		for _, id := range hiddenIDs {
+			hiddenMap[id] = true
+		}
+
 		resp := bolaoStatsResponse{}
 
 		resp.Overview = bolaoOverviewDTO{
@@ -515,10 +529,14 @@ func (h *StatisticsHandler) GetBolaoStats(c *echo.Context) error {
 		userMap := map[string]*userEvolutionDTO{}
 		var userOrder []string
 		for _, row := range evolution {
+			if hiddenMap[row.UserID] {
+				continue
+			}
 			key := fmt.Sprintf("%d", row.UserID)
 			if _, ok := userMap[key]; !ok {
 				userMap[key] = &userEvolutionDTO{
 					User:   row.Name,
+					UserID: row.UserID,
 					Avatar: row.AvatarURL,
 					Points: []roundPointDTO{},
 				}
@@ -551,11 +569,15 @@ func (h *StatisticsHandler) GetBolaoStats(c *echo.Context) error {
 		}
 
 		for _, a := range accuracy {
+			if hiddenMap[a.UserID] {
+				continue
+			}
 			rate := 0.0
 			if a.Total > 0 {
 				rate = float64(a.Exact+a.Partial) / float64(a.Total)
 			}
 			resp.AccuracyRanking = append(resp.AccuracyRanking, accuracyRankingDTO{
+				UserID:    a.UserID,
 				Name:      a.Name,
 				AvatarURL: a.AvatarURL,
 				Exact:     a.Exact,

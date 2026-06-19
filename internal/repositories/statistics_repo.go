@@ -176,6 +176,7 @@ func (r *StatisticsRepository) GetGuessDistribution(ctx context.Context) ([]Gues
 }
 
 type AccuracyRow struct {
+	UserID    int
 	Name      string
 	AvatarURL *string
 	Exact     int
@@ -187,6 +188,7 @@ type AccuracyRow struct {
 func (r *StatisticsRepository) GetAccuracyRanking(ctx context.Context) ([]AccuracyRow, error) {
 	rows, err := r.DB.QueryContext(ctx,
 		`SELECT
+		   u.id,
 		   u.name,
 		   u.avatar_url,
 		   COUNT(*) FILTER (WHERE g.points_earned = 5)       AS exact,
@@ -207,7 +209,7 @@ func (r *StatisticsRepository) GetAccuracyRanking(ctx context.Context) ([]Accura
 	var result []AccuracyRow
 	for rows.Next() {
 		var a AccuracyRow
-		if err := rows.Scan(&a.Name, &a.AvatarURL, &a.Exact, &a.Partial, &a.Wrong, &a.Total); err != nil {
+		if err := rows.Scan(&a.UserID, &a.Name, &a.AvatarURL, &a.Exact, &a.Partial, &a.Wrong, &a.Total); err != nil {
 			return nil, err
 		}
 		result = append(result, a)

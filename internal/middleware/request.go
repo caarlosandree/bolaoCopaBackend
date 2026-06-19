@@ -142,6 +142,8 @@ func actionFor(method, route string) string {
 		return "auth.login"
 	case http.MethodGet + " /api/ranking":
 		return "ranking.list"
+	case http.MethodPatch + " /api/admin/users/:id/hidden":
+		return "admin.user.hidden.update"
 	case http.MethodGet + " /api/rounds/active":
 		return "round.active.get"
 	case http.MethodPost + " /api/guesses":

@@ -11,6 +11,7 @@ type User struct {
 	Role         string    `json:"role" db:"role"`       // "admin" ou "user"
 	TotalPoints  int       `json:"total_points" db:"total_points"`
 	AvatarURL    *string   `json:"avatar_url" db:"avatar_url"`
+	IsHidden     bool      `json:"is_hidden" db:"is_hidden"`
 	CreatedAt    time.Time `json:"created_at" db:"created_at"`
 }
 
