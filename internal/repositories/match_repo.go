@@ -108,7 +108,7 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 	}
 
 	if m.TheSportsDBEventID != nil {
-		matchID, err := r.updateMatchingImported(ctx, tx, m)
+		matchID, err := r.updateMatchingImported(ctx, tx, m, roundID)
 		if err != nil {
 			return 0, err
 		}
@@ -129,8 +129,8 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 		 WHERE external_source IS NOT NULL AND external_id IS NOT NULL
 		 DO UPDATE SET
 		    round_id = EXCLUDED.round_id,
-		    home_team = EXCLUDED.home_team,
-		    away_team = EXCLUDED.away_team,
+		    home_team = COALESCE(NULLIF(EXCLUDED.home_team, ''), matches.home_team),
+		    away_team = COALESCE(NULLIF(EXCLUDED.away_team, ''), matches.away_team),
 		    match_time = EXCLUDED.match_time,
 		    group_name = EXCLUDED.group_name,
 		    venue = EXCLUDED.venue,
@@ -159,13 +159,34 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 	return matchID, nil
 }
 
-func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx, m ImportedMatch) (int, error) {
-	// Se já existe um match com esse thesportsdb_event_id, retorna-o diretamente
-	// sem tentar atribuir o ID a outro match (evita violação de constraint UNIQUE).
+func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx, m ImportedMatch, roundID int) (int, error) {
+	// Se já existe um match com esse thesportsdb_event_id, atualiza os campos
+	// incrementais do evento sem tentar atribuir o ID a outro match.
 	var existing int
 	err := tx.QueryRowContext(ctx,
-		`SELECT id FROM matches WHERE thesportsdb_event_id = $1 LIMIT 1`,
+		`UPDATE matches
+		 SET round_id = $2,
+		     home_team = COALESCE(NULLIF($3, ''), home_team),
+		     away_team = COALESCE(NULLIF($4, ''), away_team),
+		     match_time = $5,
+		     group_name = COALESCE($6, group_name),
+		     venue = COALESCE($7, venue),
+		     match_number = COALESCE($8, match_number),
+		     thesportsdb_home_team_id = COALESCE(thesportsdb_home_team_id, $9),
+		     thesportsdb_away_team_id = COALESCE(thesportsdb_away_team_id, $10),
+		     updated_at = CURRENT_TIMESTAMP
+		 WHERE thesportsdb_event_id = $1
+		 RETURNING id`,
 		m.TheSportsDBEventID,
+		roundID,
+		m.HomeTeam,
+		m.AwayTeam,
+		m.MatchTime,
+		m.GroupName,
+		m.Venue,
+		m.MatchNumber,
+		m.TheSportsDBHomeID,
+		m.TheSportsDBAwayID,
 	).Scan(&existing)
 	if err != nil && err != sql.ErrNoRows {
 		return 0, err
@@ -179,9 +200,9 @@ func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx
 		`WITH candidate AS (
 		    SELECT id
 		    FROM matches
-		    WHERE lower(home_team) = lower($8)
-		      AND lower(away_team) = lower($9)
-		      AND match_time = $10
+		    WHERE lower(home_team) = lower($7)
+		      AND lower(away_team) = lower($8)
+		      AND match_time = $9
 		      AND (
 		          thesportsdb_event_id IS NULL
 		          OR thesportsdb_event_id = $4

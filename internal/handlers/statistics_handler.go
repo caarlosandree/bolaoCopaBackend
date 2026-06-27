@@ -338,6 +338,12 @@ type bracketTeamDTO struct {
 }
 
 var knockoutRoundMap = map[string]string{
+	"4":               "r32",
+	"5":               "r16",
+	"6":               "qf",
+	"7":               "sf",
+	"8":               "third",
+	"9":               "final",
 	"32":              "r32",
 	"round of 32":     "r32",
 	"16":              "r16",
@@ -354,14 +360,26 @@ var knockoutRoundMap = map[string]string{
 	"third place":     "third",
 }
 
+var localKnockoutRoundMap = map[int]string{
+	4:   "r32",
+	5:   "r16",
+	6:   "qf",
+	7:   "sf",
+	8:   "third",
+	9:   "final",
+	100: "r32",
+	101: "r16",
+	102: "qf",
+	103: "sf",
+	104: "third",
+	105: "final",
+}
+
+const roundOf32MatchCount = 16
+
 func (h *StatisticsHandler) GetBracket(c *echo.Context) error {
 	return h.serveJSON(c, "bracket", 5*time.Minute, func() (any, error) {
 		ctx := c.Request().Context()
-
-		events, _, err := h.sdb.ListLeagueSchedule(ctx, h.leagueID, h.season)
-		if err != nil {
-			return nil, err
-		}
 
 		roundOrder := []string{"r32", "r16", "qf", "sf", "final", "third"}
 		rounds := map[string][]bracketMatchDTO{}
@@ -369,47 +387,40 @@ func (h *StatisticsHandler) GetBracket(c *echo.Context) error {
 			rounds[r] = []bracketMatchDTO{}
 		}
 
-		for _, ev := range events {
-			roundKey := normalizeRound(ev.Round)
-			if roundKey == "" {
-				continue
-			}
-
-			var homeScore, awayScore *int
-			if ev.HomeScore != nil {
-				if v, err := strconv.Atoi(*ev.HomeScore); err == nil {
-					homeScore = &v
+		events, _, externalErr := h.sdb.ListLeagueSchedule(ctx, h.leagueID, h.season)
+		if externalErr == nil {
+			for _, ev := range events {
+				roundKey := normalizeRound(ev.Round)
+				if roundKey == "" {
+					continue
 				}
+
+				upsertBracketMatch(rounds, roundKey, eventToBracketMatch(ev))
 			}
-			if ev.AwayScore != nil {
-				if v, err := strconv.Atoi(*ev.AwayScore); err == nil {
-					awayScore = &v
+		}
+
+		localMatches, localErr := h.repo.ListLocalBracketMatches(ctx)
+		if localErr != nil {
+			if externalErr != nil {
+				return nil, localErr
+			}
+		} else {
+			for _, match := range localMatches {
+				roundKey := localKnockoutRoundMap[match.RoundNumber]
+				if roundKey == "" {
+					continue
 				}
+				upsertBracketMatch(rounds, roundKey, localToBracketMatch(match))
 			}
+		}
 
-			status := "scheduled"
-			switch ev.Status {
-			case "Match Finished":
-				status = "finished"
-			case "In Progress", "HT":
-				status = "ongoing"
+		standings, standingsErr := h.sdb.LookupLeagueTable(ctx, h.leagueID, h.season)
+		if standingsErr == nil {
+			existingTeams := roundOf32TeamSet(rounds["r32"])
+			remainingSlots := max(0, roundOf32MatchCount-len(rounds["r32"]))
+			for _, match := range deriveQualifiedRoundOf32Entries(standings, existingTeams, remainingSlots) {
+				upsertBracketMatch(rounds, "r32", match)
 			}
-
-			rounds[roundKey] = append(rounds[roundKey], bracketMatchDTO{
-				ID: ev.IDEvent,
-				Home: bracketTeamDTO{
-					Name:  ev.HomeTeam,
-					Badge: ev.HomeBadge,
-					Score: homeScore,
-				},
-				Away: bracketTeamDTO{
-					Name:  ev.AwayTeam,
-					Badge: ev.AwayBadge,
-					Score: awayScore,
-				},
-				Status:    status,
-				MatchTime: ev.Timestamp,
-			})
 		}
 
 		// Atribui slots sequenciais por rodada
@@ -421,6 +432,245 @@ func (h *StatisticsHandler) GetBracket(c *echo.Context) error {
 
 		return bracketResponse{Rounds: rounds}, nil
 	})
+}
+
+func eventToBracketMatch(ev services.TheSportsDBEvent) bracketMatchDTO {
+	var homeScore, awayScore *int
+	if ev.HomeScore != nil {
+		if v, err := strconv.Atoi(*ev.HomeScore); err == nil {
+			homeScore = &v
+		}
+	}
+	if ev.AwayScore != nil {
+		if v, err := strconv.Atoi(*ev.AwayScore); err == nil {
+			awayScore = &v
+		}
+	}
+
+	status := "scheduled"
+	switch ev.Status {
+	case "Match Finished":
+		status = "finished"
+	case "In Progress", "HT":
+		status = "ongoing"
+	}
+
+	return bracketMatchDTO{
+		ID: ev.IDEvent,
+		Home: bracketTeamDTO{
+			Name:  ev.HomeTeam,
+			Badge: ev.HomeBadge,
+			Score: homeScore,
+		},
+		Away: bracketTeamDTO{
+			Name:  ev.AwayTeam,
+			Badge: ev.AwayBadge,
+			Score: awayScore,
+		},
+		Status:    status,
+		MatchTime: ev.Timestamp,
+	}
+}
+
+func localToBracketMatch(match repositories.LocalBracketMatch) bracketMatchDTO {
+	id := fmt.Sprintf("local-%d", match.ID)
+	if match.TheSportsDBEventID != nil {
+		id = *match.TheSportsDBEventID
+	}
+
+	return bracketMatchDTO{
+		ID: id,
+		Home: bracketTeamDTO{
+			Name:  match.HomeTeam,
+			Score: match.HomeScore,
+		},
+		Away: bracketTeamDTO{
+			Name:  match.AwayTeam,
+			Score: match.AwayScore,
+		},
+		Status:    match.Status,
+		MatchTime: match.MatchTime.UTC().Format(time.RFC3339),
+	}
+}
+
+func upsertBracketMatch(rounds map[string][]bracketMatchDTO, roundKey string, match bracketMatchDTO) {
+	if strings.TrimSpace(match.Home.Name) == "" && strings.TrimSpace(match.Away.Name) == "" {
+		return
+	}
+
+	for i, existing := range rounds[roundKey] {
+		if existing.ID == match.ID {
+			rounds[roundKey][i] = mergeBracketMatch(existing, match)
+			return
+		}
+	}
+	rounds[roundKey] = append(rounds[roundKey], match)
+}
+
+func mergeBracketMatch(existing, incoming bracketMatchDTO) bracketMatchDTO {
+	if strings.TrimSpace(incoming.Home.Name) == "" {
+		incoming.Home.Name = existing.Home.Name
+	}
+	if strings.TrimSpace(incoming.Away.Name) == "" {
+		incoming.Away.Name = existing.Away.Name
+	}
+	if incoming.Home.Badge == "" {
+		incoming.Home.Badge = existing.Home.Badge
+	}
+	if incoming.Away.Badge == "" {
+		incoming.Away.Badge = existing.Away.Badge
+	}
+	return incoming
+}
+
+func deriveQualifiedRoundOf32Entries(
+	standings []services.TheSportsDBStanding,
+	existingTeams map[string]bool,
+	limit int,
+) []bracketMatchDTO {
+	if limit <= 0 {
+		return nil
+	}
+
+	qualified := explicitQualifiedStandings(standings)
+	addCompletedGroupTopTwo(qualified, standings)
+
+	matches := make([]bracketMatchDTO, 0, len(qualified))
+	for normalized, team := range qualified {
+		if existingTeams[normalized] {
+			continue
+		}
+		matches = append(matches, qualifiedStandingToBracketMatch(normalized, team))
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].Home.Name < matches[j].Home.Name
+	})
+	if len(matches) > limit {
+		return matches[:limit]
+	}
+	return matches
+}
+
+func explicitQualifiedStandings(
+	standings []services.TheSportsDBStanding,
+) map[string]services.TheSportsDBStanding {
+	qualified := map[string]services.TheSportsDBStanding{}
+	for _, standing := range standings {
+		if !isRoundOf32Description(standing.StrDescription) {
+			continue
+		}
+		qualified[normalizeTeamName(standing.StrTeam)] = standing
+	}
+	return qualified
+}
+
+func addCompletedGroupTopTwo(
+	qualified map[string]services.TheSportsDBStanding,
+	standings []services.TheSportsDBStanding,
+) {
+	groupTeams := completedGroupTeams(standings)
+	for groupName := range groupTeams {
+		teams := groupTeams[groupName]
+		for rank := 0; rank < 2 && rank < len(teams); rank++ {
+			team := teams[rank]
+			qualified[normalizeTeamName(team.StrTeam)] = team
+		}
+	}
+}
+
+func qualifiedStandingToBracketMatch(
+	normalized string,
+	standing services.TheSportsDBStanding,
+) bracketMatchDTO {
+	return bracketMatchDTO{
+		ID: fmt.Sprintf("qualified-r32-%s", normalized),
+		Home: bracketTeamDTO{
+			Name:  standing.StrTeam,
+			Badge: standingBadge(standing),
+		},
+		Status:    "scheduled",
+		MatchTime: "",
+	}
+}
+
+func isRoundOf32Description(description string) bool {
+	return strings.EqualFold(strings.TrimSpace(description), "Round of 32")
+}
+
+func roundOf32TeamSet(matches []bracketMatchDTO) map[string]bool {
+	teams := map[string]bool{}
+	for _, match := range matches {
+		if strings.TrimSpace(match.Home.Name) != "" {
+			teams[normalizeTeamName(match.Home.Name)] = true
+		}
+		if strings.TrimSpace(match.Away.Name) != "" {
+			teams[normalizeTeamName(match.Away.Name)] = true
+		}
+	}
+	return teams
+}
+
+func standingBadge(standing services.TheSportsDBStanding) string {
+	if standing.StrTeamBadge != "" {
+		return standing.StrTeamBadge
+	}
+	return standing.StrBadge
+}
+
+func completedGroupTeams(standings []services.TheSportsDBStanding) map[string][]services.TheSportsDBStanding {
+	groups := map[string][]services.TheSportsDBStanding{}
+	for _, standing := range standings {
+		groupName := groupForStanding(standing)
+		groups[groupName] = append(groups[groupName], standing)
+	}
+
+	for groupName, teams := range groups {
+		if !isCompletedGroup(teams) {
+			delete(groups, groupName)
+			continue
+		}
+		sort.Slice(teams, func(i, j int) bool {
+			return standingLess(teams[i], teams[j])
+		})
+		groups[groupName] = teams
+	}
+	return groups
+}
+
+func groupForStanding(standing services.TheSportsDBStanding) string {
+	norm := normalizeTeamName(standing.StrTeam)
+	if groupName, ok := teamToGroupMap[norm]; ok {
+		return groupName
+	}
+	if standing.StrDescription != "" && standing.StrDescription != "Playoffs" {
+		return standing.StrDescription
+	}
+	return "Grupo A"
+}
+
+func isCompletedGroup(teams []services.TheSportsDBStanding) bool {
+	if len(teams) < 4 {
+		return false
+	}
+	for _, team := range teams {
+		if atoi(team.IntPlayed) < 3 {
+			return false
+		}
+	}
+	return true
+}
+
+func standingLess(a, b services.TheSportsDBStanding) bool {
+	if atoi(a.IntPoints) != atoi(b.IntPoints) {
+		return atoi(a.IntPoints) > atoi(b.IntPoints)
+	}
+	if atoi(a.IntGoalDifference) != atoi(b.IntGoalDifference) {
+		return atoi(a.IntGoalDifference) > atoi(b.IntGoalDifference)
+	}
+	if atoi(a.IntGoalsFor) != atoi(b.IntGoalsFor) {
+		return atoi(a.IntGoalsFor) > atoi(b.IntGoalsFor)
+	}
+	return a.StrTeam < b.StrTeam
 }
 
 // ==========================================
@@ -608,6 +858,12 @@ func normalizeRound(round string) string {
 	lower := strings.ToLower(strings.TrimSpace(round))
 	if v, ok := knockoutRoundMap[lower]; ok {
 		return v
+	}
+	if strings.HasPrefix(lower, "round ") {
+		number := strings.TrimSpace(strings.TrimPrefix(lower, "round "))
+		if v, ok := knockoutRoundMap[number]; ok {
+			return v
+		}
 	}
 	return ""
 }

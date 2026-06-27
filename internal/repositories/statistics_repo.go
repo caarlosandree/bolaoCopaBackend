@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"database/sql"
+	"time"
 )
 
 type StatisticsRepository struct {
@@ -238,4 +239,66 @@ func (r *StatisticsRepository) GetActiveMatchExternalIDs(ctx context.Context) ([
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+type LocalBracketMatch struct {
+	ID                 int
+	RoundNumber        int
+	HomeTeam           string
+	AwayTeam           string
+	HomeScore          *int
+	AwayScore          *int
+	Status             string
+	MatchTime          time.Time
+	TheSportsDBEventID *string
+}
+
+func (r *StatisticsRepository) ListLocalBracketMatches(ctx context.Context) ([]LocalBracketMatch, error) {
+	rows, err := r.DB.QueryContext(ctx,
+		`SELECT m.id, r.number, m.home_team, m.away_team,
+		        m.home_score, m.away_score, m.status, m.match_time,
+		        m.thesportsdb_event_id
+		 FROM matches m
+		 JOIN rounds r ON r.id = m.round_id
+		 WHERE r.number BETWEEN 100 AND 105 OR r.number BETWEEN 4 AND 9
+		 ORDER BY r.number ASC, m.match_time ASC, m.id ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var matches []LocalBracketMatch
+	for rows.Next() {
+		var m LocalBracketMatch
+		var homeScore, awayScore sql.NullInt32
+		var eventID sql.NullString
+		if err := rows.Scan(
+			&m.ID,
+			&m.RoundNumber,
+			&m.HomeTeam,
+			&m.AwayTeam,
+			&homeScore,
+			&awayScore,
+			&m.Status,
+			&m.MatchTime,
+			&eventID,
+		); err != nil {
+			return nil, err
+		}
+		if homeScore.Valid {
+			v := int(homeScore.Int32)
+			m.HomeScore = &v
+		}
+		if awayScore.Valid {
+			v := int(awayScore.Int32)
+			m.AwayScore = &v
+		}
+		if eventID.Valid && eventID.String != "" {
+			value := eventID.String
+			m.TheSportsDBEventID = &value
+		}
+		matches = append(matches, m)
+	}
+	return matches, rows.Err()
 }

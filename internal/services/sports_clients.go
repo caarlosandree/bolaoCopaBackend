@@ -86,6 +86,7 @@ type TheSportsDBStanding struct {
 	IDTeam            string `json:"idTeam"`
 	StrTeam           string `json:"strTeam"`
 	StrTeamBadge      string `json:"strTeamBadge"`
+	StrBadge          string `json:"strBadge"`
 	IntPlayed         string `json:"intPlayed"`
 	IntWin            string `json:"intWin"`
 	IntDraw           string `json:"intDraw"`
