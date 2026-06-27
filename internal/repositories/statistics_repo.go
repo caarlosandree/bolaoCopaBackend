@@ -260,7 +260,7 @@ func (r *StatisticsRepository) ListLocalBracketMatches(ctx context.Context) ([]L
 		        m.thesportsdb_event_id
 		 FROM matches m
 		 JOIN rounds r ON r.id = m.round_id
-		 WHERE r.number BETWEEN 100 AND 105 OR r.number BETWEEN 4 AND 9
+		 WHERE r.number BETWEEN 100 AND 105 OR r.number BETWEEN 4 AND 9 OR r.number = 122
 		 ORDER BY r.number ASC, m.match_time ASC, m.id ASC`,
 	)
 	if err != nil {

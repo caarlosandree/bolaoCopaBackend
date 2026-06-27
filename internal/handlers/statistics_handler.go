@@ -373,6 +373,7 @@ var localKnockoutRoundMap = map[int]string{
 	103: "sf",
 	104: "third",
 	105: "final",
+	122: "r32",
 }
 
 const roundOf32MatchCount = 16

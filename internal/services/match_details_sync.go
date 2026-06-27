@@ -282,11 +282,7 @@ func parseTheSportsDBTime(event TheSportsDBEvent) (time.Time, error) {
 }
 
 func parseRoundNumber(value string) int {
-	n, err := strconvAtoi(value)
-	if err != nil || n <= 0 {
-		return 900
-	}
-	return n
+	return parseIntRound(value)
 }
 
 func roundNameFromNumber(number int) string {
@@ -309,13 +305,6 @@ func roundNameFromNumber(number int) string {
 	default:
 		return "Copa do Mundo"
 	}
-}
-
-func strconvAtoi(value string) (int, error) {
-	value = strings.TrimSpace(value)
-	var n int
-	_, err := fmt.Sscanf(value, "%d", &n)
-	return n, err
 }
 
 func sameTeams(homeA, awayA, homeB, awayB string) bool {

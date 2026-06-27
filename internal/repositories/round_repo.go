@@ -58,6 +58,7 @@ func (r *RoundRepository) ListSummary(ctx context.Context) ([]models.RoundSummar
 		 FROM rounds r
 		 LEFT JOIN matches m ON m.round_id = r.id
 		 GROUP BY r.id
+		 HAVING COUNT(m.id) > 0 AND r.number <> 122
 		 ORDER BY r.number ASC`,
 	)
 	if err != nil {

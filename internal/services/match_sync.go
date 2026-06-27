@@ -228,23 +228,26 @@ func parseIntRound(raw string) int {
 	if n <= 3 {
 		return n
 	}
-	// Rounds de mata-mata vêm com números maiores — mapeia para constantes internas
-	// TheSportsDB tende a usar rounds 4+ para eliminatórias
+	// Rounds de mata-mata podem vir como tamanho da fase no TheSportsDB.
 	switch n {
-	case 4:
-		return 100 // Fase de 32 (Copa 2026)
-	case 5:
+	case 32:
+		return 100 // Fase de 32
+	case 16:
 		return 101 // Oitavas
+	case 4:
+		return 100 // Compatibilidade com payloads antigos
+	case 5:
+		return 101 // Compatibilidade com payloads antigos
 	case 6:
-		return 102 // Quartas
+		return 102 // Compatibilidade com payloads antigos
 	case 7:
-		return 103 // Semi
+		return 103 // Compatibilidade com payloads antigos
 	case 8:
-		return 104 // 3º lugar
+		return 104 // Compatibilidade com payloads antigos
 	case 9:
-		return 105 // Final
+		return 105 // Compatibilidade com payloads antigos
 	default:
-		return n + 90 // fallback para rounds inesperados
+		return n
 	}
 }
 
