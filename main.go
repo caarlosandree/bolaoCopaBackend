@@ -180,6 +180,7 @@ func main() {
 	admin.GET("/rounds", roundH.ListAll)
 	admin.POST("/rounds/:id/activate", roundH.Activate)
 	admin.POST("/matches/:id/score", adminH.UpdateMatchScore)
+	admin.POST("/matches/:id/knockout", adminH.UpdateKnockoutResult)
 	admin.POST("/sync/schedule", syncH.SyncSchedule)
 	admin.POST("/sync/results", syncH.SyncResults)
 	admin.POST("/sync/reset-schedule", syncH.ResetSchedule)

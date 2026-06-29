@@ -53,6 +53,9 @@ CREATE TABLE IF NOT EXISTS matches (
     group_name VARCHAR(50),
     venue VARCHAR(120),
     match_number INT,
+    is_knockout BOOLEAN DEFAULT FALSE,
+    winner_team VARCHAR(10) DEFAULT NULL CHECK (winner_team IS NULL OR winner_team IN ('home', 'away')),
+    advance_method VARCHAR(10) DEFAULT NULL CHECK (advance_method IS NULL OR advance_method IN ('et', 'penalties')),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -75,6 +78,8 @@ CREATE TABLE IF NOT EXISTS guesses (
     home_guess INT NOT NULL CHECK (home_guess >= 0),
     away_guess INT NOT NULL CHECK (away_guess >= 0),
     points_earned INT DEFAULT NULL CHECK (points_earned >= 0),
+    advancing_team VARCHAR(10) DEFAULT NULL CHECK (advancing_team IS NULL OR advancing_team IN ('home', 'away')),
+    advance_method VARCHAR(10) DEFAULT NULL CHECK (advance_method IS NULL OR advance_method IN ('et', 'penalties')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     -- Garante que o usuário só tenha um palpite por partida
     CONSTRAINT unique_user_match_guess UNIQUE (user_id, match_id)

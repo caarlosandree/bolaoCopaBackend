@@ -163,6 +163,7 @@ func (s *MatchSyncService) importFromTheSportsDB(ctx context.Context) (int, erro
 		groupName := emptyStringToNil(event.Group)
 		venue := emptyStringToNil(event.Venue)
 		matchNum := i + 1
+		isKnockout := roundNum >= 100
 
 		_, err = s.Matches.UpsertImported(ctx, tx, repositories.ImportedMatch{
 			ExternalSource:     theSportsDBSource,
@@ -179,6 +180,7 @@ func (s *MatchSyncService) importFromTheSportsDB(ctx context.Context) (int, erro
 			TheSportsDBEventID: &eventID,
 			TheSportsDBHomeID:  &homeTeamID,
 			TheSportsDBAwayID:  &awayTeamID,
+			IsKnockout:         isKnockout,
 		})
 		if err != nil {
 			return imported, fmt.Errorf("evento %s: %w", eventID, err)
@@ -289,6 +291,19 @@ func theSportsDBStatusToInternal(status string) string {
 	}
 }
 
+// theSportsDBAdvanceMethod deriva o método de desempate (et vs penalties) do status do TheSportsDB.
+// Retorna "et" para prorrogação, "penalties" para pênaltis, ou "" se não se aplica.
+func theSportsDBAdvanceMethod(status string) string {
+	switch strings.ToLower(status) {
+	case "et":
+		return "et"
+	case "p":
+		return "penalties"
+	default:
+		return ""
+	}
+}
+
 func parseTheSportsDBScore(s *string) (int, bool) {
 	if s == nil {
 		return 0, false
@@ -362,6 +377,23 @@ func (s *MatchSyncService) updateResultsFromTheSportsDB(ctx context.Context) (th
 			if err != nil {
 				return summary, err
 			}
+
+			// Mata-mata: deriva winner_team e advance_method quando há empate aos 90 min
+			if match.IsKnockout && homeScore == awayScore {
+				advanceMethod := theSportsDBAdvanceMethod(event.Status)
+				var winnerTeam *string
+				// Se foi decidido na prorrogação, o placar final (pós-ET) tem vencedor.
+				// Mas como o placar que chegou é o de 90 min (empatado), não dá pra derivar.
+				// O admin precisa definir winner_team manualmente.
+				// Apenas registramos o advance_method se conseguimos detectá-lo.
+				if advanceMethod != "" {
+					if err := s.updateKnockoutAdvanceMethod(ctx, match.ID, advanceMethod); err != nil {
+						return summary, err
+					}
+				}
+				_ = winnerTeam
+			}
+
 			summary.ScoresUpdated++
 			continue
 		}
@@ -425,6 +457,17 @@ func (s *MatchSyncService) updateMatchStatusAndScore(ctx context.Context, matchI
 		return err
 	}
 	return tx.Commit()
+}
+
+// updateKnockoutAdvanceMethod registra o advance_method (et/penalties) para uma partida
+// de mata-mata que terminou empatada aos 90 min. O winner_team é definido manualmente
+// pelo admin (o TheSportsDB não fornece quem avançou de forma confiável).
+func (s *MatchSyncService) updateKnockoutAdvanceMethod(ctx context.Context, matchID int, advanceMethod string) error {
+	_, err := s.DB.ExecContext(ctx,
+		`UPDATE matches SET advance_method = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+		advanceMethod, matchID,
+	)
+	return err
 }
 
 // resolveTeamAlias normaliza variantes de nome de seleção para uma forma canônica.

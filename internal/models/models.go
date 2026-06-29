@@ -63,37 +63,46 @@ type Match struct {
 	TheSportsDBHomeID  *string    `json:"thesportsdb_home_team_id,omitempty" db:"thesportsdb_home_team_id"`
 	TheSportsDBAwayID  *string    `json:"thesportsdb_away_team_id,omitempty" db:"thesportsdb_away_team_id"`
 	StreamURL          *string    `json:"stream_url,omitempty" db:"stream_url"`
+	IsKnockout         bool       `json:"is_knockout" db:"is_knockout"`
+	WinnerTeam         *string    `json:"winner_team,omitempty" db:"winner_team"`       // "home" ou "away" (mata-mata)
+	AdvanceMethod      *string    `json:"advance_method,omitempty" db:"advance_method"` // "et" ou "penalties" (mata-mata)
 	CreatedAt          time.Time  `json:"created_at" db:"created_at"`
 	UserGuess          *UserGuess `json:"user_guess,omitempty"` // Vinculado dinamicamente para exibição
 }
 
 // UserGuess representa dados simplificados do palpite do usuário para a partida.
 type UserGuess struct {
-	ID           int  `json:"id,omitempty"`
-	HomeGuess    int  `json:"home_guess"`
-	AwayGuess    int  `json:"away_guess"`
-	PointsEarned *int `json:"points_earned,omitempty"`
+	ID            int     `json:"id,omitempty"`
+	HomeGuess     int     `json:"home_guess"`
+	AwayGuess     int     `json:"away_guess"`
+	PointsEarned  *int    `json:"points_earned,omitempty"`
+	AdvancingTeam *string `json:"advancing_team,omitempty"` // "home" ou "away" (empate em mata-mata)
+	AdvanceMethod *string `json:"advance_method,omitempty"` // "et" ou "penalties" (empate em mata-mata)
 }
 
 // Guess representa a tabela de palpites completa.
 type Guess struct {
-	ID           int       `json:"id" db:"id"`
-	UserID       int       `json:"user_id" db:"user_id"`
-	MatchID      int       `json:"match_id" db:"match_id"`
-	HomeGuess    int       `json:"home_guess" db:"home_guess"`
-	AwayGuess    int       `json:"away_guess" db:"away_guess"`
-	PointsEarned *int      `json:"points_earned" db:"points_earned"`
-	CreatedAt    time.Time `json:"created_at" db:"created_at"`
+	ID            int       `json:"id" db:"id"`
+	UserID        int       `json:"user_id" db:"user_id"`
+	MatchID       int       `json:"match_id" db:"match_id"`
+	HomeGuess     int       `json:"home_guess" db:"home_guess"`
+	AwayGuess     int       `json:"away_guess" db:"away_guess"`
+	PointsEarned  *int      `json:"points_earned" db:"points_earned"`
+	AdvancingTeam *string   `json:"advancing_team,omitempty" db:"advancing_team"`
+	AdvanceMethod *string   `json:"advance_method,omitempty" db:"advance_method"`
+	CreatedAt     time.Time `json:"created_at" db:"created_at"`
 }
 
 // MatchGuessView representa o palpite de um usuário com seus dados públicos.
 type MatchGuessView struct {
-	UserID       int     `json:"user_id"`
-	Name         string  `json:"name"`
-	AvatarURL    *string `json:"avatar_url"`
-	HomeGuess    int     `json:"home_guess"`
-	AwayGuess    int     `json:"away_guess"`
-	PointsEarned *int    `json:"points_earned"`
+	UserID        int     `json:"user_id"`
+	Name          string  `json:"name"`
+	AvatarURL     *string `json:"avatar_url"`
+	HomeGuess     int     `json:"home_guess"`
+	AwayGuess     int     `json:"away_guess"`
+	PointsEarned  *int    `json:"points_earned"`
+	AdvancingTeam *string `json:"advancing_team,omitempty"`
+	AdvanceMethod *string `json:"advance_method,omitempty"`
 }
 
 // Ranking representa uma entrada de linha na tabela de classificação geral.

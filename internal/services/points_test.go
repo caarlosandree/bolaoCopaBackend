@@ -46,3 +46,89 @@ func TestCalculatePoints(t *testing.T) {
 		})
 	}
 }
+
+func TestCalculatePointsWithContext(t *testing.T) {
+	home := "home"
+	away := "away"
+	et := "et"
+	penalties := "penalties"
+
+	tests := []struct {
+		name       string
+		homeGuess  int
+		awayGuess  int
+		homeScore  int
+		awayScore  int
+		mc         MatchContext
+		gc         GuessContext
+		wantPoints int
+	}{
+		// Vitória em mata-mata: sem bônus (não há empate)
+		{"knockout home win exact", 2, 1, 2, 1,
+			MatchContext{IsKnockout: true}, GuessContext{}, 5},
+		{"knockout away win exact", 0, 1, 0, 1,
+			MatchContext{IsKnockout: true}, GuessContext{}, 5},
+
+		// Empate exato em mata-mata + bônus total (acertou quem avança + método)
+		{"knockout draw exact + both bonuses", 1, 1, 1, 1,
+			MatchContext{IsKnockout: true, WinnerTeam: &home, AdvanceMethod: &et},
+			GuessContext{AdvancingTeam: &home, AdvanceMethod: &et}, 8},
+		{"knockout draw exact + both bonuses penalties", 2, 2, 2, 2,
+			MatchContext{IsKnockout: true, WinnerTeam: &away, AdvanceMethod: &penalties},
+			GuessContext{AdvancingTeam: &away, AdvanceMethod: &penalties}, 8},
+
+		// Empate exato em mata-mata + só acertou quem avança
+		{"knockout draw exact + advance team only", 1, 1, 1, 1,
+			MatchContext{IsKnockout: true, WinnerTeam: &home, AdvanceMethod: &et},
+			GuessContext{AdvancingTeam: &home, AdvanceMethod: &penalties}, 7},
+
+		// Empate exato em mata-mata + só acertou método
+		{"knockout draw exact + method only", 1, 1, 1, 1,
+			MatchContext{IsKnockout: true, WinnerTeam: &home, AdvanceMethod: &et},
+			GuessContext{AdvancingTeam: &away, AdvanceMethod: &et}, 6},
+
+		// Empate exato em mata-mata + errou ambos
+		{"knockout draw exact + no bonus", 1, 1, 1, 1,
+			MatchContext{IsKnockout: true, WinnerTeam: &home, AdvanceMethod: &et},
+			GuessContext{AdvancingTeam: &away, AdvanceMethod: &penalties}, 5},
+
+		// Empate não exato em mata-mata + bônus total
+		{"knockout draw non-exact + both bonuses", 2, 2, 1, 1,
+			MatchContext{IsKnockout: true, WinnerTeam: &home, AdvanceMethod: &penalties},
+			GuessContext{AdvancingTeam: &home, AdvanceMethod: &penalties}, 4},
+
+		// Empate não exato em mata-mata + só acertou quem avança
+		{"knockout draw non-exact + advance team only", 3, 3, 1, 1,
+			MatchContext{IsKnockout: true, WinnerTeam: &away, AdvanceMethod: &et},
+			GuessContext{AdvancingTeam: &away, AdvanceMethod: &penalties}, 3},
+
+		// Empate não exato em mata-mata + errou ambos
+		{"knockout draw non-exact + no bonus", 0, 0, 1, 1,
+			MatchContext{IsKnockout: true, WinnerTeam: &home, AdvanceMethod: &et},
+			GuessContext{AdvancingTeam: &away, AdvanceMethod: &penalties}, 1},
+
+		// Empate em mata-mata mas winner_team ainda não definido (admin não preencheu)
+		{"knockout draw exact no winner yet", 1, 1, 1, 1,
+			MatchContext{IsKnockout: true, WinnerTeam: nil},
+			GuessContext{AdvancingTeam: &home, AdvanceMethod: &et}, 5},
+
+		// Empate em fase de grupos (não é mata-mata): sem bônus
+		{"group stage draw exact no bonus", 1, 1, 1, 1,
+			MatchContext{IsKnockout: false},
+			GuessContext{AdvancingTeam: &home, AdvanceMethod: &et}, 5},
+
+		// Vitória em mata-mata com advancing_team preenchido (deve ser ignorado)
+		{"knockout home win with advancing team ignored", 2, 1, 2, 1,
+			MatchContext{IsKnockout: true, WinnerTeam: &home},
+			GuessContext{AdvancingTeam: &home, AdvanceMethod: &et}, 5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CalculatePointsWithContext(tt.homeGuess, tt.awayGuess, tt.homeScore, tt.awayScore, tt.mc, tt.gc)
+			if got != tt.wantPoints {
+				t.Errorf("CalculatePointsWithContext() = %d; want %d", got, tt.wantPoints)
+			}
+		})
+	}
+}

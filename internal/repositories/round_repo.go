@@ -152,7 +152,9 @@ func (r *RoundRepository) FindMatchesByRound(ctx context.Context, roundID, userI
 		`SELECT m.id, m.round_id, m.home_team, m.away_team,
 		        m.home_score, m.away_score, m.status, m.match_time,
 		        m.group_name, m.venue, m.stream_url,
-		        g.id, g.home_guess, g.away_guess, g.points_earned
+		        m.is_knockout, m.winner_team, m.advance_method,
+		        g.id, g.home_guess, g.away_guess, g.points_earned,
+		        g.advancing_team, g.advance_method
 		 FROM matches m
 		 LEFT JOIN guesses g ON g.match_id = m.id AND g.user_id = $2
 		 WHERE m.round_id = $1
@@ -168,15 +170,19 @@ func (r *RoundRepository) FindMatchesByRound(ctx context.Context, roundID, userI
 	for rows.Next() {
 		var m models.Match
 		var groupName, venue, streamURL sql.NullString
+		var winnerTeam, advanceMethod sql.NullString
 		var guessID sql.NullInt64
 		var homeGuess, awayGuess sql.NullInt32
 		var pointsEarned sql.NullInt32
+		var guessAdvancingTeam, guessAdvanceMethod sql.NullString
 
 		err := rows.Scan(
 			&m.ID, &m.RoundID, &m.HomeTeam, &m.AwayTeam,
 			&m.HomeScore, &m.AwayScore, &m.Status, &m.MatchTime,
 			&groupName, &venue, &streamURL,
+			&m.IsKnockout, &winnerTeam, &advanceMethod,
 			&guessID, &homeGuess, &awayGuess, &pointsEarned,
+			&guessAdvancingTeam, &guessAdvanceMethod,
 		)
 		if err != nil {
 			return nil, err
@@ -191,6 +197,14 @@ func (r *RoundRepository) FindMatchesByRound(ctx context.Context, roundID, userI
 		if streamURL.Valid {
 			m.StreamURL = &streamURL.String
 		}
+		if winnerTeam.Valid && winnerTeam.String != "" {
+			v := winnerTeam.String
+			m.WinnerTeam = &v
+		}
+		if advanceMethod.Valid && advanceMethod.String != "" {
+			v := advanceMethod.String
+			m.AdvanceMethod = &v
+		}
 
 		if guessID.Valid {
 			ug := &models.UserGuess{
@@ -201,6 +215,14 @@ func (r *RoundRepository) FindMatchesByRound(ctx context.Context, roundID, userI
 			if pointsEarned.Valid {
 				pts := int(pointsEarned.Int32)
 				ug.PointsEarned = &pts
+			}
+			if guessAdvancingTeam.Valid && guessAdvancingTeam.String != "" {
+				v := guessAdvancingTeam.String
+				ug.AdvancingTeam = &v
+			}
+			if guessAdvanceMethod.Valid && guessAdvanceMethod.String != "" {
+				v := guessAdvanceMethod.String
+				ug.AdvanceMethod = &v
 			}
 			m.UserGuess = ug
 		}

@@ -222,9 +222,11 @@ func NewGuessHandler(guesses *repositories.GuessRepository, matches *repositorie
 }
 
 type saveGuessRequest struct {
-	MatchID   int `json:"match_id"`
-	HomeGuess int `json:"home_guess"`
-	AwayGuess int `json:"away_guess"`
+	MatchID       int     `json:"match_id"`
+	HomeGuess     int     `json:"home_guess"`
+	AwayGuess     int     `json:"away_guess"`
+	AdvancingTeam *string `json:"advancing_team,omitempty"` // "home" ou "away" (empate em mata-mata)
+	AdvanceMethod *string `json:"advance_method,omitempty"` // "et" ou "penalties" (empate em mata-mata)
 }
 
 func (h *GuessHandler) SaveGuess(c *echo.Context) error {
@@ -251,7 +253,15 @@ func (h *GuessHandler) SaveGuess(c *echo.Context) error {
 		return respond.Error(c, http.StatusForbidden, "palpites bloqueados 10 minutos antes do início")
 	}
 
-	if err := h.Guesses.Upsert(c.Request().Context(), userID, req.MatchID, req.HomeGuess, req.AwayGuess); err != nil {
+	// Valida advancing_team/advance_method: só faz sentido em empate de mata-mata
+	isDraw := req.HomeGuess == req.AwayGuess
+	if !isDraw {
+		req.AdvancingTeam = nil
+		req.AdvanceMethod = nil
+	}
+
+	if err := h.Guesses.Upsert(c.Request().Context(), userID, req.MatchID, req.HomeGuess, req.AwayGuess,
+		req.AdvancingTeam, req.AdvanceMethod); err != nil {
 		return respond.InternalError(c, "erro ao salvar palpite")
 	}
 
@@ -349,6 +359,82 @@ func (h *AdminHandler) UpdateMatchScore(c *echo.Context) error {
 		"message":  "placar atualizado e pontos calculados",
 		"match_id": matchID,
 		"score":    map[string]int{"home": req.HomeScore, "away": req.AwayScore},
+	})
+}
+
+type updateKnockoutResultRequest struct {
+	WinnerTeam    *string `json:"winner_team"`    // "home" ou "away"
+	AdvanceMethod *string `json:"advance_method"` // "et" ou "penalties"
+}
+
+func (h *AdminHandler) UpdateKnockoutResult(c *echo.Context) error {
+	matchID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		return respond.Error(c, http.StatusBadRequest, "ID de partida inválido")
+	}
+
+	var req updateKnockoutResultRequest
+	if err := c.Bind(&req); err != nil {
+		return respond.Error(c, http.StatusBadRequest, "dados inválidos")
+	}
+
+	// Valida winner_team
+	if req.WinnerTeam != nil {
+		wt := strings.ToLower(*req.WinnerTeam)
+		if wt != "home" && wt != "away" {
+			return respond.Error(c, http.StatusBadRequest, "winner_team deve ser \"home\" ou \"away\"")
+		}
+		req.WinnerTeam = &wt
+	}
+
+	// Valida advance_method
+	if req.AdvanceMethod != nil {
+		am := strings.ToLower(*req.AdvanceMethod)
+		if am != "et" && am != "penalties" {
+			return respond.Error(c, http.StatusBadRequest, "advance_method deve ser \"et\" ou \"penalties\"")
+		}
+		req.AdvanceMethod = &am
+	}
+
+	ctx := c.Request().Context()
+	result, err := h.Score.UpdateKnockoutResult(ctx, matchID, req.WinnerTeam, req.AdvanceMethod)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return respond.Error(c, http.StatusNotFound, "partida não encontrada")
+		}
+		return respond.InternalError(c, "erro ao atualizar resultado de mata-mata")
+	}
+
+	if h.Audit != nil {
+		h.Audit.Record(ctx, audit.Event{
+			RequestID:    requestctx.RequestID(c),
+			ActorUserID:  actorUserID(c),
+			ActorRole:    actorRole(c),
+			Action:       "admin.match_knockout.updated",
+			ResourceType: "match",
+			ResourceID:   strconv.Itoa(matchID),
+			Method:       c.Request().Method,
+			Path:         c.Request().URL.Path,
+			StatusCode:   http.StatusOK,
+			Outcome:      "success",
+			IP:           c.RealIP(),
+			UserAgent:    c.Request().UserAgent(),
+			Metadata: map[string]any{
+				"changed":              result.Changed,
+				"guesses_recalculated": result.GuessesRecalculated,
+				"points_delta_total":   result.PointsDeltaTotal,
+				"winner_team":          req.WinnerTeam,
+				"advance_method":       req.AdvanceMethod,
+			},
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message":        "resultado de mata-mata atualizado e pontos recalculados",
+		"match_id":       matchID,
+		"winner_team":    req.WinnerTeam,
+		"advance_method": req.AdvanceMethod,
+		"recalculated":   result.GuessesRecalculated,
 	})
 }
 
@@ -842,13 +928,16 @@ type matchGuessesResponse struct {
 }
 
 type matchGuessesSummary struct {
-	ID        int    `json:"id"`
-	HomeTeam  string `json:"home_team"`
-	AwayTeam  string `json:"away_team"`
-	HomeScore *int   `json:"home_score"`
-	AwayScore *int   `json:"away_score"`
-	Status    string `json:"status"`
-	MatchTime string `json:"match_time"`
+	ID            int     `json:"id"`
+	HomeTeam      string  `json:"home_team"`
+	AwayTeam      string  `json:"away_team"`
+	HomeScore     *int    `json:"home_score"`
+	AwayScore     *int    `json:"away_score"`
+	Status        string  `json:"status"`
+	MatchTime     string  `json:"match_time"`
+	IsKnockout    bool    `json:"is_knockout"`
+	WinnerTeam    *string `json:"winner_team,omitempty"`
+	AdvanceMethod *string `json:"advance_method,omitempty"`
 }
 
 type matchGuessesStats struct {
@@ -922,13 +1011,16 @@ func (h *MatchGuessesHandler) GetMatchGuesses(c *echo.Context) error {
 
 	return c.JSON(http.StatusOK, matchGuessesResponse{
 		Match: matchGuessesSummary{
-			ID:        match.ID,
-			HomeTeam:  match.HomeTeam,
-			AwayTeam:  match.AwayTeam,
-			HomeScore: match.HomeScore,
-			AwayScore: match.AwayScore,
-			Status:    match.Status,
-			MatchTime: match.MatchTime.UTC().Format(time.RFC3339),
+			ID:            match.ID,
+			HomeTeam:      match.HomeTeam,
+			AwayTeam:      match.AwayTeam,
+			HomeScore:     match.HomeScore,
+			AwayScore:     match.AwayScore,
+			Status:        match.Status,
+			MatchTime:     match.MatchTime.UTC().Format(time.RFC3339),
+			IsKnockout:    match.IsKnockout,
+			WinnerTeam:    match.WinnerTeam,
+			AdvanceMethod: match.AdvanceMethod,
 		},
 		Stats:   stats,
 		Guesses: guesses,

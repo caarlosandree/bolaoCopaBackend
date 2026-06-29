@@ -150,6 +150,8 @@ func actionFor(method, route string) string {
 		return "guess.save"
 	case http.MethodPost + " /api/admin/matches/:id/score":
 		return "admin.match_score.update"
+	case http.MethodPost + " /api/admin/matches/:id/knockout":
+		return "admin.match_knockout.update"
 	default:
 		return strings.ToLower(method) + "." + strings.Trim(strings.ReplaceAll(route, "/", "."), ".")
 	}

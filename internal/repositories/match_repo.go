@@ -36,6 +36,7 @@ type ImportedMatch struct {
 	GroupName          *string
 	Venue              *string
 	MatchNumber        *int
+	IsKnockout         bool
 }
 
 type MatchSyncRow struct {
@@ -48,6 +49,9 @@ type MatchSyncRow struct {
 	MatchTime          time.Time
 	GroupName          *string
 	TheSportsDBEventID *string
+	IsKnockout         bool
+	WinnerTeam         *string
+	AdvanceMethod      *string
 }
 
 func (r *MatchRepository) FindMatchTime(ctx context.Context, matchID int) (*MatchTime, error) {
@@ -122,9 +126,10 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 		`INSERT INTO matches (
 		    round_id, home_team, away_team, match_time, status,
 		    external_source, external_id, group_name, venue, match_number,
-		    thesportsdb_event_id, thesportsdb_home_team_id, thesportsdb_away_team_id
+		    thesportsdb_event_id, thesportsdb_home_team_id, thesportsdb_away_team_id,
+		    is_knockout
 		 )
-		 VALUES ($1, $2, $3, $4, 'scheduled', $5, $6, $7, $8, $9, $10, $11, $12)
+		 VALUES ($1, $2, $3, $4, 'scheduled', $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		 ON CONFLICT (external_source, external_id)
 		 WHERE external_source IS NOT NULL AND external_id IS NOT NULL
 		 DO UPDATE SET
@@ -138,6 +143,7 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 		    thesportsdb_event_id = COALESCE(matches.thesportsdb_event_id, EXCLUDED.thesportsdb_event_id),
 		    thesportsdb_home_team_id = COALESCE(matches.thesportsdb_home_team_id, EXCLUDED.thesportsdb_home_team_id),
 		    thesportsdb_away_team_id = COALESCE(matches.thesportsdb_away_team_id, EXCLUDED.thesportsdb_away_team_id),
+		    is_knockout = EXCLUDED.is_knockout,
 		    updated_at = CURRENT_TIMESTAMP
 		 RETURNING id`,
 		roundID,
@@ -152,6 +158,7 @@ func (r *MatchRepository) UpsertImported(ctx context.Context, tx *sql.Tx, m Impo
 		m.TheSportsDBEventID,
 		m.TheSportsDBHomeID,
 		m.TheSportsDBAwayID,
+		m.IsKnockout,
 	).Scan(&matchID)
 	if err != nil {
 		return 0, err
@@ -174,6 +181,7 @@ func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx
 		     match_number = COALESCE($8, match_number),
 		     thesportsdb_home_team_id = COALESCE(thesportsdb_home_team_id, $9),
 		     thesportsdb_away_team_id = COALESCE(thesportsdb_away_team_id, $10),
+		     is_knockout = $11,
 		     updated_at = CURRENT_TIMESTAMP
 		 WHERE thesportsdb_event_id = $1
 		 RETURNING id`,
@@ -187,6 +195,7 @@ func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx
 		m.MatchNumber,
 		m.TheSportsDBHomeID,
 		m.TheSportsDBAwayID,
+		m.IsKnockout,
 	).Scan(&existing)
 	if err != nil && err != sql.ErrNoRows {
 		return 0, err
@@ -297,7 +306,8 @@ func stringPtrIfValid(value sql.NullString) *string {
 
 func (r *MatchRepository) ListForSync(ctx context.Context) ([]MatchSyncRow, error) {
 	rows, err := r.DB.QueryContext(ctx,
-		`SELECT id, home_team, away_team, home_score, away_score, status, match_time, group_name, thesportsdb_event_id
+		`SELECT id, home_team, away_team, home_score, away_score, status, match_time, group_name, thesportsdb_event_id,
+		        is_knockout, winner_team, advance_method
 		 FROM matches
 		 ORDER BY match_time ASC`,
 	)
@@ -310,7 +320,7 @@ func (r *MatchRepository) ListForSync(ctx context.Context) ([]MatchSyncRow, erro
 	for rows.Next() {
 		var m MatchSyncRow
 		var homeScore, awayScore sql.NullInt32
-		var groupName, theSportsDBEventID sql.NullString
+		var groupName, theSportsDBEventID, winnerTeam, advanceMethod sql.NullString
 		if err := rows.Scan(
 			&m.ID,
 			&m.HomeTeam,
@@ -321,6 +331,9 @@ func (r *MatchRepository) ListForSync(ctx context.Context) ([]MatchSyncRow, erro
 			&m.MatchTime,
 			&groupName,
 			&theSportsDBEventID,
+			&m.IsKnockout,
+			&winnerTeam,
+			&advanceMethod,
 		); err != nil {
 			return nil, err
 		}
@@ -339,6 +352,14 @@ func (r *MatchRepository) ListForSync(ctx context.Context) ([]MatchSyncRow, erro
 		if theSportsDBEventID.Valid {
 			value := theSportsDBEventID.String
 			m.TheSportsDBEventID = &value
+		}
+		if winnerTeam.Valid && winnerTeam.String != "" {
+			value := winnerTeam.String
+			m.WinnerTeam = &value
+		}
+		if advanceMethod.Valid && advanceMethod.String != "" {
+			value := advanceMethod.String
+			m.AdvanceMethod = &value
 		}
 		matches = append(matches, m)
 	}
@@ -360,15 +381,18 @@ func (r *MatchRepository) HasMatchesDueForResultCheck(ctx context.Context, cutof
 }
 
 type AdminMatch struct {
-	ID        int       `json:"id"`
-	HomeTeam  string    `json:"home_team"`
-	AwayTeam  string    `json:"away_team"`
-	HomeScore *int      `json:"home_score"`
-	AwayScore *int      `json:"away_score"`
-	Status    string    `json:"status"`
-	MatchTime time.Time `json:"match_time"`
-	RoundName string    `json:"round_name"`
-	GroupName *string   `json:"group_name"`
+	ID            int       `json:"id"`
+	HomeTeam      string    `json:"home_team"`
+	AwayTeam      string    `json:"away_team"`
+	HomeScore     *int      `json:"home_score"`
+	AwayScore     *int      `json:"away_score"`
+	Status        string    `json:"status"`
+	MatchTime     time.Time `json:"match_time"`
+	RoundName     string    `json:"round_name"`
+	GroupName     *string   `json:"group_name"`
+	IsKnockout    bool      `json:"is_knockout"`
+	WinnerTeam    *string   `json:"winner_team,omitempty"`
+	AdvanceMethod *string   `json:"advance_method,omitempty"`
 }
 
 type AdminMatchesPage struct {
@@ -396,7 +420,8 @@ func (r *MatchRepository) ListAdminPage(ctx context.Context, page, pageSize int)
 
 	rows, err := r.DB.QueryContext(ctx,
 		`SELECT m.id, m.home_team, m.away_team, m.home_score, m.away_score, m.status,
-		        m.match_time, r.name AS round_name, m.group_name
+		        m.match_time, r.name AS round_name, m.group_name,
+		        m.is_knockout, m.winner_team, m.advance_method
 		 FROM matches m
 		 JOIN rounds r ON r.id = m.round_id
 		 ORDER BY m.match_time ASC, m.id ASC
@@ -413,11 +438,12 @@ func (r *MatchRepository) ListAdminPage(ctx context.Context, page, pageSize int)
 	for rows.Next() {
 		var m AdminMatch
 		var homeScore, awayScore sql.NullInt32
-		var groupName sql.NullString
+		var groupName, winnerTeam, advanceMethod sql.NullString
 		if err := rows.Scan(
 			&m.ID, &m.HomeTeam, &m.AwayTeam,
 			&homeScore, &awayScore,
 			&m.Status, &m.MatchTime, &m.RoundName, &groupName,
+			&m.IsKnockout, &winnerTeam, &advanceMethod,
 		); err != nil {
 			return nil, err
 		}
@@ -431,6 +457,14 @@ func (r *MatchRepository) ListAdminPage(ctx context.Context, page, pageSize int)
 		}
 		if groupName.Valid {
 			m.GroupName = &groupName.String
+		}
+		if winnerTeam.Valid && winnerTeam.String != "" {
+			v := winnerTeam.String
+			m.WinnerTeam = &v
+		}
+		if advanceMethod.Valid && advanceMethod.String != "" {
+			v := advanceMethod.String
+			m.AdvanceMethod = &v
 		}
 		matches = append(matches, m)
 	}
@@ -449,11 +483,14 @@ func (r *MatchRepository) ListAdminPage(ctx context.Context, page, pageSize int)
 func (r *MatchRepository) FindByID(ctx context.Context, matchID int) (*models.Match, error) {
 	var m models.Match
 	var homeScore, awayScore sql.NullInt32
+	var winnerTeam, advanceMethod sql.NullString
 	err := r.DB.QueryRowContext(ctx,
-		`SELECT id, round_id, home_team, away_team, home_score, away_score, status, match_time
+		`SELECT id, round_id, home_team, away_team, home_score, away_score, status, match_time,
+		        is_knockout, winner_team, advance_method
 		 FROM matches WHERE id = $1`,
 		matchID,
-	).Scan(&m.ID, &m.RoundID, &m.HomeTeam, &m.AwayTeam, &homeScore, &awayScore, &m.Status, &m.MatchTime)
+	).Scan(&m.ID, &m.RoundID, &m.HomeTeam, &m.AwayTeam, &homeScore, &awayScore, &m.Status, &m.MatchTime,
+		&m.IsKnockout, &winnerTeam, &advanceMethod)
 	if err != nil {
 		return nil, err
 	}
@@ -464,6 +501,14 @@ func (r *MatchRepository) FindByID(ctx context.Context, matchID int) (*models.Ma
 	if awayScore.Valid {
 		score := int(awayScore.Int32)
 		m.AwayScore = &score
+	}
+	if winnerTeam.Valid && winnerTeam.String != "" {
+		v := winnerTeam.String
+		m.WinnerTeam = &v
+	}
+	if advanceMethod.Valid && advanceMethod.String != "" {
+		v := advanceMethod.String
+		m.AdvanceMethod = &v
 	}
 	return &m, nil
 }
@@ -471,13 +516,16 @@ func (r *MatchRepository) FindByID(ctx context.Context, matchID int) (*models.Ma
 func (r *MatchRepository) FindByIDForUpdate(ctx context.Context, tx *sql.Tx, matchID int) (*models.Match, error) {
 	var m models.Match
 	var homeScore, awayScore sql.NullInt32
+	var winnerTeam, advanceMethod sql.NullString
 	err := tx.QueryRowContext(ctx,
-		`SELECT id, round_id, home_team, away_team, home_score, away_score, status, match_time, created_at
+		`SELECT id, round_id, home_team, away_team, home_score, away_score, status, match_time, created_at,
+		        is_knockout, winner_team, advance_method
 		 FROM matches
 		 WHERE id = $1
 		 FOR UPDATE`,
 		matchID,
-	).Scan(&m.ID, &m.RoundID, &m.HomeTeam, &m.AwayTeam, &homeScore, &awayScore, &m.Status, &m.MatchTime, &m.CreatedAt)
+	).Scan(&m.ID, &m.RoundID, &m.HomeTeam, &m.AwayTeam, &homeScore, &awayScore, &m.Status, &m.MatchTime, &m.CreatedAt,
+		&m.IsKnockout, &winnerTeam, &advanceMethod)
 	if err != nil {
 		return nil, err
 	}
@@ -488,6 +536,14 @@ func (r *MatchRepository) FindByIDForUpdate(ctx context.Context, tx *sql.Tx, mat
 	if awayScore.Valid {
 		score := int(awayScore.Int32)
 		m.AwayScore = &score
+	}
+	if winnerTeam.Valid && winnerTeam.String != "" {
+		v := winnerTeam.String
+		m.WinnerTeam = &v
+	}
+	if advanceMethod.Valid && advanceMethod.String != "" {
+		v := advanceMethod.String
+		m.AdvanceMethod = &v
 	}
 	return &m, nil
 }
@@ -504,6 +560,27 @@ func (r *MatchRepository) AdjustUserPoints(ctx context.Context, tx *sql.Tx, user
 	_, err := tx.ExecContext(ctx,
 		`UPDATE users SET total_points = total_points + $1 WHERE id = $2`,
 		delta, userID,
+	)
+	return err
+}
+
+// UpdateKnockoutResult define winner_team e advance_method para uma partida de mata-mata.
+// Usado pelo admin quando o jogo foi decidido na prorrogação ou pênaltis.
+func (r *MatchRepository) UpdateKnockoutResult(ctx context.Context, tx *sql.Tx, matchID int, winnerTeam, advanceMethod *string) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE matches
+		 SET winner_team = $1, advance_method = $2, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = $3`,
+		winnerTeam, advanceMethod, matchID,
+	)
+	return err
+}
+
+// SetKnockoutFlag marca ou desmarca uma partida como mata-mata.
+func (r *MatchRepository) SetKnockoutFlag(ctx context.Context, matchID int, isKnockout bool) error {
+	_, err := r.DB.ExecContext(ctx,
+		`UPDATE matches SET is_knockout = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+		isKnockout, matchID,
 	)
 	return err
 }
