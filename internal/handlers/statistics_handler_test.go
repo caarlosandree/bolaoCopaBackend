@@ -110,7 +110,7 @@ func idsOf(matches []bracketMatchDTO) []string {
 	return out
 }
 
-func TestFillFinalAndThirdFromSemis(t *testing.T) {
+func TestSanitizeFinalAndThirdFromSemis(t *testing.T) {
 	t.Parallel()
 
 	rounds := map[string][]bracketMatchDTO{
@@ -129,14 +129,22 @@ func TestFillFinalAndThirdFromSemis(t *testing.T) {
 				Status: "ongoing",
 			},
 		},
-		"final": {},
+		// lixo legado que não deve aparecer como final
+		"final": {
+			{
+				ID:     "junk1",
+				Home:   bracketTeamDTO{Name: "Spain", Score: intPtr(4)},
+				Away:   bracketTeamDTO{Name: "Saudi Arabia", Score: intPtr(0)},
+				Status: "finished",
+			},
+		},
 		"third": {},
 	}
 
-	fillFinalAndThirdFromSemis(rounds)
+	sanitizeFinalAndThird(rounds)
 
 	if len(rounds["final"]) != 1 {
-		t.Fatalf("expected synthetic final, got %d", len(rounds["final"]))
+		t.Fatalf("expected 1 final, got %d", len(rounds["final"]))
 	}
 	final := rounds["final"][0]
 	if final.Home.Name != "Spain" {
@@ -144,6 +152,9 @@ func TestFillFinalAndThirdFromSemis(t *testing.T) {
 	}
 	if !stringsContainsFold(final.Away.Name, "England") || !stringsContainsFold(final.Away.Name, "Argentina") {
 		t.Fatalf("final away placeholder=%q, want Vencedor England/Argentina", final.Away.Name)
+	}
+	if final.ID != "synthetic-final" {
+		t.Fatalf("expected synthetic final after junk removal, got id=%s", final.ID)
 	}
 	// 3º só com duas semis finalizadas
 	if len(rounds["third"]) != 0 {
@@ -156,7 +167,7 @@ func TestFillFinalAndThirdFromSemis(t *testing.T) {
 	rounds["sf"][1].Home.Score = intPtr(1)
 	rounds["sf"][1].Away.Score = intPtr(2)
 	rounds["sf"][1].WinnerTeam = &awayW
-	fillFinalAndThirdFromSemis(rounds)
+	sanitizeFinalAndThird(rounds)
 
 	if rounds["final"][0].Away.Name != "Argentina" {
 		t.Fatalf("final away=%q, want Argentina", rounds["final"][0].Away.Name)

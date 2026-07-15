@@ -473,10 +473,8 @@ func (h *StatisticsHandler) GetBracket(c *echo.Context) error {
 		orderKnockoutBracket(rounds)
 
 		// Preenche final / 3º a partir das semis quando a API ainda não publicou o jogo
-		fillFinalAndThirdFromSemis(rounds)
-		// Preferir jogos reais a placeholders sintéticos
-		rounds["final"] = preferRealBracketMatches(rounds["final"])
-		rounds["third"] = preferRealBracketMatches(rounds["third"])
+		// e remove jogos legados/errados que caíram nessas chaves.
+		sanitizeFinalAndThird(rounds)
 		assignBracketSlots(rounds)
 
 		return bracketResponse{Rounds: rounds}, nil
@@ -676,6 +674,9 @@ func classifyKnockoutBySemis(match bracketMatchDTO, semis []bracketMatchDTO) str
 	if len(semis) == 0 {
 		return ""
 	}
+	if isSameFixture(match, semis) {
+		return ""
+	}
 	home := normalizeTeamName(match.Home.Name)
 	away := normalizeTeamName(match.Away.Name)
 	if home == "" || away == "" {
@@ -684,33 +685,31 @@ func classifyKnockoutBySemis(match bracketMatchDTO, semis []bracketMatchDTO) str
 
 	winners := map[string]bool{}
 	losers := map[string]bool{}
-	sfTeams := map[string]bool{}
+	pending := map[string]bool{} // times de semi ainda sem vencedor
 	for _, sf := range semis {
-		sfTeams[normalizeTeamName(sf.Home.Name)] = true
-		sfTeams[normalizeTeamName(sf.Away.Name)] = true
-		if w := normalizeTeamName(bracketWinnerName(sf)); w != "" {
+		w := normalizeTeamName(bracketWinnerName(sf))
+		if w != "" {
 			winners[w] = true
+			if l := normalizeTeamName(bracketLoserName(sf)); l != "" {
+				losers[l] = true
+			}
+			continue
 		}
-		if l := normalizeTeamName(bracketLoserName(sf)); l != "" {
-			losers[l] = true
-		}
+		pending[normalizeTeamName(sf.Home.Name)] = true
+		pending[normalizeTeamName(sf.Away.Name)] = true
 	}
 
 	// Ambos finalistas conhecidos
 	if winners[home] && winners[away] {
 		return "final"
 	}
+	// Finalista conhecido × time de semi em andamento
+	if (winners[home] && pending[away]) || (winners[away] && pending[home]) {
+		return "final"
+	}
 	// Ambos perdedores das semis → 3º lugar
 	if losers[home] && losers[away] {
 		return "third"
-	}
-	// Um finalista + time ainda em semi em andamento (ou placeholder)
-	if (winners[home] || winners[away]) && (sfTeams[home] || sfTeams[away]) {
-		// evita classificar um jogo de semi de novo
-		if isSameFixture(match, semis) {
-			return ""
-		}
-		return "final"
 	}
 	return ""
 }
@@ -760,38 +759,136 @@ func bracketLoserName(m bracketMatchDTO) string {
 	return strings.TrimSpace(m.Home.Name)
 }
 
-// fillFinalAndThirdFromSemis cria/atualiza final e 3º lugar com base nas semis
-// quando o TheSportsDB ainda não publicou esses jogos.
-func fillFinalAndThirdFromSemis(rounds map[string][]bracketMatchDTO) {
-	sf := rounds["sf"]
-	if len(sf) == 0 {
-		return
-	}
+type sfOutcome struct {
+	winners    []string
+	losers     []string
+	pendingSF  *bracketMatchDTO
+	finalistOK map[string]bool // vencedores + times de semi pendente
+	loserOK    map[string]bool
+}
 
-	var winners, losers []string
-	var pendingSF *bracketMatchDTO
-	for i := range sf {
-		m := sf[i]
+func collectSFOutcome(semis []bracketMatchDTO) sfOutcome {
+	out := sfOutcome{
+		finalistOK: map[string]bool{},
+		loserOK:    map[string]bool{},
+	}
+	for i := range semis {
+		m := semis[i]
 		if w := bracketWinnerName(m); w != "" {
-			winners = append(winners, w)
+			out.winners = append(out.winners, w)
+			out.finalistOK[normalizeTeamName(w)] = true
 			if l := bracketLoserName(m); l != "" {
-				losers = append(losers, l)
+				out.losers = append(out.losers, l)
+				out.loserOK[normalizeTeamName(l)] = true
 			}
 			continue
 		}
-		// Semi ainda sem vencedor: placeholder para a final
 		cp := m
-		pendingSF = &cp
+		out.pendingSF = &cp
+		out.finalistOK[normalizeTeamName(m.Home.Name)] = true
+		out.finalistOK[normalizeTeamName(m.Away.Name)] = true
+	}
+	return out
+}
+
+func isPlaceholderTeam(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "" {
+		return true
+	}
+	for _, p := range []string{"vencedor", "perdedor", "a definir", "tbd", "winner", "loser"} {
+		if strings.Contains(n, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func teamAllowedInSet(name string, allowed map[string]bool) bool {
+	if isPlaceholderTeam(name) {
+		return true
+	}
+	return allowed[normalizeTeamName(name)]
+}
+
+func matchFitsTeamSet(m bracketMatchDTO, allowed map[string]bool) bool {
+	return teamAllowedInSet(m.Home.Name, allowed) && teamAllowedInSet(m.Away.Name, allowed)
+}
+
+// sanitizeFinalAndThird remove jogos legados/errados e garante final/3º coerentes com as semis.
+func sanitizeFinalAndThird(rounds map[string][]bracketMatchDTO) {
+	sf := rounds["sf"]
+	if len(sf) == 0 {
+		rounds["final"] = nil
+		rounds["third"] = nil
+		return
+	}
+	out := collectSFOutcome(sf)
+
+	// Mantém só finais cujas duas equipes são finalistas possíveis desta copa.
+	// Placeholders sintéticos antigos são regenerados quando as semis avançam.
+	var validFinal []bracketMatchDTO
+	for _, m := range rounds["final"] {
+		if strings.HasPrefix(m.ID, "synthetic-") {
+			continue
+		}
+		if matchFitsTeamSet(m, out.finalistOK) && !isSameFixture(m, sf) {
+			// Exige nomes reais (sem "Vencedor …") se já temos os dois finalistas
+			if len(out.winners) >= 2 &&
+				(isPlaceholderTeam(m.Home.Name) || isPlaceholderTeam(m.Away.Name)) {
+				continue
+			}
+			validFinal = append(validFinal, m)
+		}
+	}
+	// Preferir 1 jogo real; senão sintético
+	rounds["final"] = pickOrSynthesize(
+		validFinal,
+		"synthetic-final",
+		out.winners,
+		out.pendingSF,
+		false,
+	)
+
+	var validThird []bracketMatchDTO
+	for _, m := range rounds["third"] {
+		if strings.HasPrefix(m.ID, "synthetic-") {
+			continue
+		}
+		if matchFitsTeamSet(m, out.loserOK) && !isSameFixture(m, sf) {
+			validThird = append(validThird, m)
+		}
+	}
+	if len(out.losers) >= 2 {
+		rounds["third"] = pickOrSynthesize(validThird, "synthetic-third", out.losers, nil, true)
+	} else {
+		rounds["third"] = validThird
+	}
+}
+
+// pickOrSynthesize escolhe o melhor jogo real ou monta um sintético a partir das semis.
+func pickOrSynthesize(
+	valid []bracketMatchDTO,
+	syntheticID string,
+	known []string,
+	pendingSF *bracketMatchDTO,
+	requireBothKnown bool,
+) []bracketMatchDTO {
+	// Preferir jogo real (não sintético) com status mais avançado
+	if len(valid) > 0 {
+		sort.SliceStable(valid, func(i, j int) bool {
+			return statusRank(valid[i].Status) > statusRank(valid[j].Status)
+		})
+		return []bracketMatchDTO{valid[0]}
 	}
 
-	// Final: preenche times conhecidos (e placeholder se faltar uma semi)
 	homeName, awayName := "", ""
-	if len(winners) >= 1 {
-		homeName = winners[0]
+	if len(known) >= 1 {
+		homeName = known[0]
 	}
-	if len(winners) >= 2 {
-		awayName = winners[1]
-	} else if pendingSF != nil {
+	if len(known) >= 2 {
+		awayName = known[1]
+	} else if pendingSF != nil && !requireBothKnown {
 		awayName = fmt.Sprintf(
 			"Vencedor %s/%s",
 			strings.TrimSpace(pendingSF.Home.Name),
@@ -799,61 +896,14 @@ func fillFinalAndThirdFromSemis(rounds map[string][]bracketMatchDTO) {
 		)
 	}
 
-	if homeName != "" || awayName != "" {
-		applyDerivedMatch(rounds, "final", "synthetic-final", homeName, awayName, len(winners) >= 2)
+	if requireBothKnown && (homeName == "" || awayName == "") {
+		return nil
+	}
+	if homeName == "" && awayName == "" {
+		return nil
 	}
 
-	// 3º lugar só com ambos perdedores conhecidos
-	if len(losers) >= 2 {
-		applyDerivedMatch(rounds, "third", "synthetic-third", losers[0], losers[1], true)
-	}
-}
-
-func applyDerivedMatch(
-	rounds map[string][]bracketMatchDTO,
-	roundKey, syntheticID, homeName, awayName string,
-	bothKnown bool,
-) {
-	existing := rounds[roundKey]
-	// Se já existe jogo real (não sintético) com placar/status avançado, só completa nomes vazios
-	for i := range existing {
-		m := &existing[i]
-		if strings.HasPrefix(m.ID, "synthetic-") {
-			continue
-		}
-		if strings.TrimSpace(m.Home.Name) == "" && homeName != "" {
-			m.Home.Name = homeName
-		}
-		if strings.TrimSpace(m.Away.Name) == "" && awayName != "" {
-			m.Away.Name = awayName
-		}
-		rounds[roundKey] = existing
-		return
-	}
-
-	// Atualiza sintético existente ou cria um novo
-	for i := range existing {
-		if existing[i].ID == syntheticID || strings.HasPrefix(existing[i].ID, "synthetic-") {
-			if homeName != "" {
-				existing[i].Home.Name = homeName
-			}
-			if awayName != "" {
-				existing[i].Away.Name = awayName
-			}
-			existing[i].IsKnockout = true
-			if bothKnown {
-				existing[i].Status = "scheduled"
-			}
-			rounds[roundKey] = existing
-			return
-		}
-	}
-
-	status := "scheduled"
-	if !bothKnown {
-		status = "scheduled"
-	}
-	rounds[roundKey] = append(rounds[roundKey], bracketMatchDTO{
+	return []bracketMatchDTO{{
 		ID: syntheticID,
 		Home: bracketTeamDTO{
 			Name: homeName,
@@ -861,28 +911,10 @@ func applyDerivedMatch(
 		Away: bracketTeamDTO{
 			Name: awayName,
 		},
-		Status:     status,
+		Status:     "scheduled",
 		IsKnockout: true,
 		Slot:       0,
-	})
-}
-
-func preferRealBracketMatches(matches []bracketMatchDTO) []bracketMatchDTO {
-	if len(matches) <= 1 {
-		return matches
-	}
-	var real, synthetic []bracketMatchDTO
-	for _, m := range matches {
-		if strings.HasPrefix(m.ID, "synthetic-") {
-			synthetic = append(synthetic, m)
-		} else {
-			real = append(real, m)
-		}
-	}
-	if len(real) > 0 {
-		return real
-	}
-	return synthetic
+	}}
 }
 
 // orderPreviousRoundByNext coloca, para cada jogo da fase seguinte, os dois jogos
