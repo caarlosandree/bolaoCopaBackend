@@ -229,15 +229,20 @@ type saveGuessRequest struct {
 	AdvanceMethod *string `json:"advance_method,omitempty"` // "et" ou "penalties" (empate em mata-mata)
 }
 
+// desempateEditWindow é o tempo máximo após o kickoff em que ainda se pode
+// alterar quem avança / ET / pênaltis (empate em mata-mata já salvo).
+const desempateEditWindow = 80 * time.Minute
+
 func (h *GuessHandler) SaveGuess(c *echo.Context) error {
 	userID, _ := c.Get("userID").(int)
+	ctx := c.Request().Context()
 
 	var req saveGuessRequest
 	if err := c.Bind(&req); err != nil || req.MatchID == 0 {
 		return respond.Error(c, http.StatusBadRequest, "dados do palpite inválidos")
 	}
 
-	mt, err := h.Matches.FindMatchTime(c.Request().Context(), req.MatchID)
+	mt, err := h.Matches.FindMatchTime(ctx, req.MatchID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return respond.Error(c, http.StatusNotFound, "partida não encontrada")
@@ -245,12 +250,8 @@ func (h *GuessHandler) SaveGuess(c *echo.Context) error {
 		return respond.InternalError(c, "erro interno")
 	}
 
-	if mt.Status == "finished" || mt.Status == "ongoing" {
-		return respond.Error(c, http.StatusForbidden, "partida já em andamento ou finalizada")
-	}
-
-	if time.Now().UTC().After(mt.MatchTime.Add(-10 * time.Minute)) {
-		return respond.Error(c, http.StatusForbidden, "palpites bloqueados 10 minutos antes do início")
+	if mt.Status == "finished" {
+		return respond.Error(c, http.StatusForbidden, "partida já finalizada")
 	}
 
 	// Valida advancing_team/advance_method: só faz sentido em empate de mata-mata
@@ -258,14 +259,88 @@ func (h *GuessHandler) SaveGuess(c *echo.Context) error {
 	if !isDraw {
 		req.AdvancingTeam = nil
 		req.AdvanceMethod = nil
+	} else if err := validateKnockoutDesempate(req.AdvancingTeam, req.AdvanceMethod); err != nil {
+		// Em mata-mata o desempate é opcional no 1º save se ainda estiver aberto;
+		// só valida formato quando os campos vierem preenchidos.
+		return respond.Error(c, http.StatusBadRequest, err.Error())
 	}
 
-	if err := h.Guesses.Upsert(c.Request().Context(), userID, req.MatchID, req.HomeGuess, req.AwayGuess,
+	now := time.Now().UTC()
+	scoreLocked := mt.Status == "ongoing" ||
+		now.After(mt.MatchTime.Add(-10*time.Minute))
+	// Desempate só até 80 min após o início (evita mudança perto do fim / pós-jogo).
+	desempateClosed := now.After(mt.MatchTime.Add(desempateEditWindow))
+
+	if scoreLocked {
+		// Após lockout/início: só permite atualizar desempate de um empate já salvo em mata-mata.
+		// O placar do palpite permanece imutável. Janela máxima: 80 min de jogo.
+		if desempateClosed {
+			return respond.Error(c, http.StatusForbidden,
+				"desempate bloqueado após 80 minutos de jogo")
+		}
+		if !mt.IsKnockout {
+			return respond.Error(c, http.StatusForbidden, "palpites bloqueados 10 minutos antes do início")
+		}
+		existing, err := h.Guesses.FindByUserAndMatch(ctx, userID, req.MatchID)
+		if err != nil {
+			return respond.InternalError(c, "erro interno")
+		}
+		if existing == nil {
+			return respond.Error(c, http.StatusForbidden, "palpites bloqueados 10 minutos antes do início")
+		}
+		if existing.HomeGuess != existing.AwayGuess {
+			return respond.Error(c, http.StatusForbidden, "somente desempate de empate pode ser alterado após o bloqueio")
+		}
+		if req.HomeGuess != existing.HomeGuess || req.AwayGuess != existing.AwayGuess {
+			return respond.Error(c, http.StatusForbidden, "placar do palpite não pode ser alterado após o bloqueio")
+		}
+		if !isDraw {
+			return respond.Error(c, http.StatusForbidden, "somente desempate de empate pode ser alterado após o bloqueio")
+		}
+		if req.AdvancingTeam == nil || req.AdvanceMethod == nil {
+			return respond.Error(c, http.StatusBadRequest, "informe quem avança e o método de desempate")
+		}
+		if err := validateKnockoutDesempate(req.AdvancingTeam, req.AdvanceMethod); err != nil {
+			return respond.Error(c, http.StatusBadRequest, err.Error())
+		}
+
+		if err := h.Guesses.Upsert(ctx, userID, req.MatchID, existing.HomeGuess, existing.AwayGuess,
+			req.AdvancingTeam, req.AdvanceMethod); err != nil {
+			return respond.InternalError(c, "erro ao salvar palpite")
+		}
+		return c.JSON(http.StatusOK, map[string]string{"message": "desempate atualizado com sucesso"})
+	}
+
+	if err := h.Guesses.Upsert(ctx, userID, req.MatchID, req.HomeGuess, req.AwayGuess,
 		req.AdvancingTeam, req.AdvanceMethod); err != nil {
 		return respond.InternalError(c, "erro ao salvar palpite")
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "palpite salvo com sucesso"})
+}
+
+// validateKnockoutDesempate valida formato dos campos opcionais de desempate.
+// Campos nil são aceitos (palpite ainda sem desempate definido).
+func validateKnockoutDesempate(advancingTeam, advanceMethod *string) error {
+	if advancingTeam != nil {
+		switch *advancingTeam {
+		case "home", "away":
+		default:
+			return fmt.Errorf("advancing_team deve ser \"home\" ou \"away\"")
+		}
+	}
+	if advanceMethod != nil {
+		switch *advanceMethod {
+		case "et", "penalties":
+		default:
+			return fmt.Errorf("advance_method deve ser \"et\" ou \"penalties\"")
+		}
+	}
+	// Se um veio e o outro não, força par completo
+	if (advancingTeam == nil) != (advanceMethod == nil) {
+		return fmt.Errorf("informe quem avança e o método de desempate juntos")
+	}
+	return nil
 }
 
 // ==========================================

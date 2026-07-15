@@ -17,30 +17,33 @@ type TheSportsDBClient struct {
 }
 
 type TheSportsDBEvent struct {
-	IDEvent       string  `json:"idEvent"`
-	IDAPIFootball string  `json:"idAPIfootball"`
-	Season        string  `json:"strSeason"`
-	League        string  `json:"strLeague"`
-	HomeTeam      string  `json:"strHomeTeam"`
-	AwayTeam      string  `json:"strAwayTeam"`
-	HomeTeamID    string  `json:"idHomeTeam"`
-	AwayTeamID    string  `json:"idAwayTeam"`
-	HomeScore     *string `json:"intHomeScore"`
-	AwayScore     *string `json:"intAwayScore"`
-	Round         string  `json:"intRound"`
-	Timestamp     string  `json:"strTimestamp"`
-	Date          string  `json:"dateEvent"`
-	Time          string  `json:"strTime"`
-	Group         string  `json:"strGroup"`
-	Venue         string  `json:"strVenue"`
-	Country       string  `json:"strCountry"`
-	City          string  `json:"strCity"`
-	HomeBadge     string  `json:"strHomeTeamBadge"`
-	AwayBadge     string  `json:"strAwayTeamBadge"`
-	Thumb         string  `json:"strThumb"`
-	Poster        string  `json:"strPoster"`
-	Banner        string  `json:"strBanner"`
-	Status        string  `json:"strStatus"`
+	IDEvent        string  `json:"idEvent"`
+	IDAPIFootball  string  `json:"idAPIfootball"`
+	Season         string  `json:"strSeason"`
+	League         string  `json:"strLeague"`
+	HomeTeam       string  `json:"strHomeTeam"`
+	AwayTeam       string  `json:"strAwayTeam"`
+	HomeTeamID     string  `json:"idHomeTeam"`
+	AwayTeamID     string  `json:"idAwayTeam"`
+	HomeScore      *string `json:"intHomeScore"`
+	AwayScore      *string `json:"intAwayScore"`
+	HomeScoreExtra *string `json:"intHomeScoreExtra"`
+	AwayScoreExtra *string `json:"intAwayScoreExtra"`
+	Result         string  `json:"strResult"`
+	Round          string  `json:"intRound"`
+	Timestamp      string  `json:"strTimestamp"`
+	Date           string  `json:"dateEvent"`
+	Time           string  `json:"strTime"`
+	Group          string  `json:"strGroup"`
+	Venue          string  `json:"strVenue"`
+	Country        string  `json:"strCountry"`
+	City           string  `json:"strCity"`
+	HomeBadge      string  `json:"strHomeTeamBadge"`
+	AwayBadge      string  `json:"strAwayTeamBadge"`
+	Thumb          string  `json:"strThumb"`
+	Poster         string  `json:"strPoster"`
+	Banner         string  `json:"strBanner"`
+	Status         string  `json:"strStatus"`
 }
 
 func NewTheSportsDBClient(baseURL, apiKey string) *TheSportsDBClient {
@@ -64,6 +67,21 @@ func (c *TheSportsDBClient) ListLeagueSchedule(ctx context.Context, leagueID, se
 
 func (c *TheSportsDBClient) LookupEventRaw(ctx context.Context, eventID string) (json.RawMessage, error) {
 	return c.getJSON(ctx, "/lookup/event/"+url.PathEscape(eventID), nil)
+}
+
+// LookupEvent retorna o evento tipado (inclui campos de prorrogação/pênaltis
+// que a listagem de schedule às vezes omite).
+func (c *TheSportsDBClient) LookupEvent(ctx context.Context, eventID string) (*TheSportsDBEvent, error) {
+	var payload struct {
+		Lookup []TheSportsDBEvent `json:"lookup"`
+	}
+	if _, err := c.getJSON(ctx, "/lookup/event/"+url.PathEscape(eventID), &payload); err != nil {
+		return nil, err
+	}
+	if len(payload.Lookup) == 0 {
+		return nil, fmt.Errorf("evento %s não encontrado no TheSportsDB", eventID)
+	}
+	return &payload.Lookup[0], nil
 }
 
 func (c *TheSportsDBClient) LookupLineupRaw(ctx context.Context, eventID string) (json.RawMessage, error) {

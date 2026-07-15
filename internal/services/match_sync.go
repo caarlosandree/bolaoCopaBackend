@@ -72,8 +72,10 @@ func (s *MatchSyncService) SyncResults(ctx context.Context) (MatchSyncSummary, e
 func (s *MatchSyncService) Start(ctx context.Context, retryInterval, resultCheckAfter time.Duration) {
 	go func() {
 		s.runLoggedScheduleImport(ctx)
-		s.runLoggedRoundTransitions(ctx)
+		// Resultados primeiro, depois transição de rodadas — assim uma rodada
+		// cuja última partida acabou de virar "finished" fecha no mesmo ciclo.
 		s.runLoggedDueResultSync(ctx, resultCheckAfter)
+		s.runLoggedRoundTransitions(ctx)
 
 		ticker := time.NewTicker(retryInterval)
 		defer ticker.Stop()
@@ -82,8 +84,8 @@ func (s *MatchSyncService) Start(ctx context.Context, retryInterval, resultCheck
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.runLoggedRoundTransitions(ctx)
 				s.runLoggedDueResultSync(ctx, resultCheckAfter)
+				s.runLoggedRoundTransitions(ctx)
 			}
 		}
 	}()
@@ -279,12 +281,15 @@ type theSportsDBResultSummary struct {
 }
 
 func theSportsDBStatusToInternal(status string) string {
-	switch strings.ToLower(status) {
-	case "ft":
+	// TheSportsDB usa, entre outros:
+	// FT = full time, AET = after extra time, AP = after penalties.
+	// AET/AP eram mapeados para "scheduled" (default) e nunca finalizavam a partida.
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "ft", "aet", "ap", "pen", "aft", "finished", "match finished":
 		return "finished"
-	case "1h", "ht", "2h", "et", "p", "live", "susp":
+	case "1h", "ht", "2h", "et", "p", "live", "susp", "in play", "inplay":
 		return "ongoing"
-	case "pst", "can":
+	case "pst", "can", "postponed", "cancelled", "canceled", "abd":
 		return "scheduled"
 	default:
 		return "scheduled"
@@ -294,14 +299,48 @@ func theSportsDBStatusToInternal(status string) string {
 // theSportsDBAdvanceMethod deriva o método de desempate (et vs penalties) do status do TheSportsDB.
 // Retorna "et" para prorrogação, "penalties" para pênaltis, ou "" se não se aplica.
 func theSportsDBAdvanceMethod(status string) string {
-	switch strings.ToLower(status) {
-	case "et":
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "et", "aet":
 		return "et"
-	case "p":
+	case "p", "ap", "pen", "penalties":
 		return "penalties"
 	default:
 		return ""
 	}
+}
+
+// deriveKnockoutWinner devolve "home"/"away" a partir do placar e, se empate,
+// dos gols/pênaltis extras (intHomeScoreExtra/intAwayScoreExtra).
+func deriveKnockoutWinner(homeScore, awayScore int, homeExtra, awayExtra *int) *string {
+	if homeScore > awayScore {
+		w := "home"
+		return &w
+	}
+	if homeScore < awayScore {
+		w := "away"
+		return &w
+	}
+	if homeExtra != nil && awayExtra != nil {
+		if *homeExtra > *awayExtra {
+			w := "home"
+			return &w
+		}
+		if *homeExtra < *awayExtra {
+			w := "away"
+			return &w
+		}
+	}
+	return nil
+}
+
+func ptrEqualString(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }
 
 func parseTheSportsDBScore(s *string) (int, bool) {
@@ -369,32 +408,30 @@ func (s *MatchSyncService) updateResultsFromTheSportsDB(ctx context.Context) (th
 
 		// Jogo finalizado: usa UpdateFinalScore (recalcula pontos dos palpites)
 		if newStatus == "finished" && homeOK && awayOK {
-			if match.Status == "finished" && match.HomeScore != nil && match.AwayScore != nil &&
-				*match.HomeScore == homeScore && *match.AwayScore == awayScore {
+			scoreAlreadyFinal := match.Status == "finished" &&
+				match.HomeScore != nil && match.AwayScore != nil &&
+				*match.HomeScore == homeScore && *match.AwayScore == awayScore
+
+			if !scoreAlreadyFinal {
+				_, err := s.Score.UpdateFinalScore(ctx, match.ID, homeScore, awayScore)
+				if err != nil {
+					return summary, err
+				}
+				summary.ScoresUpdated++
+			}
+
+			// Mata-mata: winner_team + advance_method (AET/AP e placares com vencedor)
+			if match.IsKnockout {
+				changed, err := s.syncKnockoutResult(ctx, match, event, homeScore, awayScore)
+				if err != nil {
+					return summary, err
+				}
+				if changed && scoreAlreadyFinal {
+					summary.ScoresUpdated++
+				}
+			} else if scoreAlreadyFinal {
 				continue
 			}
-			_, err := s.Score.UpdateFinalScore(ctx, match.ID, homeScore, awayScore)
-			if err != nil {
-				return summary, err
-			}
-
-			// Mata-mata: deriva winner_team e advance_method quando há empate aos 90 min
-			if match.IsKnockout && homeScore == awayScore {
-				advanceMethod := theSportsDBAdvanceMethod(event.Status)
-				var winnerTeam *string
-				// Se foi decidido na prorrogação, o placar final (pós-ET) tem vencedor.
-				// Mas como o placar que chegou é o de 90 min (empatado), não dá pra derivar.
-				// O admin precisa definir winner_team manualmente.
-				// Apenas registramos o advance_method se conseguimos detectá-lo.
-				if advanceMethod != "" {
-					if err := s.updateKnockoutAdvanceMethod(ctx, match.ID, advanceMethod); err != nil {
-						return summary, err
-					}
-				}
-				_ = winnerTeam
-			}
-
-			summary.ScoresUpdated++
 			continue
 		}
 
@@ -459,15 +496,84 @@ func (s *MatchSyncService) updateMatchStatusAndScore(ctx context.Context, matchI
 	return tx.Commit()
 }
 
-// updateKnockoutAdvanceMethod registra o advance_method (et/penalties) para uma partida
-// de mata-mata que terminou empatada aos 90 min. O winner_team é definido manualmente
-// pelo admin (o TheSportsDB não fornece quem avançou de forma confiável).
-func (s *MatchSyncService) updateKnockoutAdvanceMethod(ctx context.Context, matchID int, advanceMethod string) error {
-	_, err := s.DB.ExecContext(ctx,
-		`UPDATE matches SET advance_method = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-		advanceMethod, matchID,
-	)
-	return err
+// syncKnockoutResult preenche winner_team e advance_method em jogos de mata-mata
+// finalizados via AET/AP (ou com placar decisivo). Recalcula bônus de palpites.
+// Retorna true se houve alteração persistida.
+func (s *MatchSyncService) syncKnockoutResult(
+	ctx context.Context,
+	match repositories.MatchSyncRow,
+	event TheSportsDBEvent,
+	homeScore, awayScore int,
+) (bool, error) {
+	advanceMethod := theSportsDBAdvanceMethod(event.Status)
+	homeExtra, homeExtraOK := parseTheSportsDBScore(event.HomeScoreExtra)
+	awayExtra, awayExtraOK := parseTheSportsDBScore(event.AwayScoreExtra)
+
+	var homeExtraPtr, awayExtraPtr *int
+	if homeExtraOK {
+		homeExtraPtr = &homeExtra
+	}
+	if awayExtraOK {
+		awayExtraPtr = &awayExtra
+	}
+
+	winnerTeam := deriveKnockoutWinner(homeScore, awayScore, homeExtraPtr, awayExtraPtr)
+
+	// Schedule v2 muitas vezes omite extras/result em AP. Busca o lookup completo.
+	if winnerTeam == nil && strings.EqualFold(strings.TrimSpace(event.Status), "AP") &&
+		s.TheSportsDB != nil && event.IDEvent != "" {
+		if detailed, err := s.TheSportsDB.LookupEvent(ctx, event.IDEvent); err == nil && detailed != nil {
+			if advanceMethod == "" {
+				advanceMethod = theSportsDBAdvanceMethod(detailed.Status)
+			}
+			hEx, hOK := parseTheSportsDBScore(detailed.HomeScoreExtra)
+			aEx, aOK := parseTheSportsDBScore(detailed.AwayScoreExtra)
+			if hOK {
+				homeExtraPtr = &hEx
+			}
+			if aOK {
+				awayExtraPtr = &aEx
+			}
+			winnerTeam = deriveKnockoutWinner(homeScore, awayScore, homeExtraPtr, awayExtraPtr)
+		} else if err != nil {
+			s.Logger.Warn("lookup de evento para desempate falhou",
+				"event_id", event.IDEvent, "match_id", match.ID, "error", err)
+		}
+	}
+
+	// AET com placar decisivo e sem status de método explícito → prorrogação
+	if advanceMethod == "" && homeScore != awayScore &&
+		strings.EqualFold(strings.TrimSpace(event.Status), "AET") {
+		advanceMethod = "et"
+	}
+
+	// Nada a persistir
+	if winnerTeam == nil && advanceMethod == "" {
+		return false, nil
+	}
+
+	var advancePtr *string
+	if advanceMethod != "" {
+		advancePtr = &advanceMethod
+	}
+
+	if ptrEqualString(match.WinnerTeam, winnerTeam) &&
+		ptrEqualString(match.AdvanceMethod, advancePtr) {
+		return false, nil
+	}
+
+	// Sem vencedor mas com método: grava só o método (admin pode completar).
+	// Com vencedor: UpdateKnockoutResult recalcula bônus.
+	if winnerTeam == nil {
+		_, err := s.DB.ExecContext(ctx,
+			`UPDATE matches SET advance_method = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+			advanceMethod, match.ID,
+		)
+		return err == nil, err
+	}
+
+	_, err := s.Score.UpdateKnockoutResult(ctx, match.ID, winnerTeam, advancePtr)
+	return err == nil, err
 }
 
 // resolveTeamAlias normaliza variantes de nome de seleção para uma forma canônica.

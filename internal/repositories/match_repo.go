@@ -17,8 +17,9 @@ func NewMatchRepository(db *sql.DB) *MatchRepository {
 }
 
 type MatchTime struct {
-	MatchTime time.Time
-	Status    string
+	MatchTime  time.Time
+	Status     string
+	IsKnockout bool
 }
 
 type ImportedMatch struct {
@@ -57,9 +58,9 @@ type MatchSyncRow struct {
 func (r *MatchRepository) FindMatchTime(ctx context.Context, matchID int) (*MatchTime, error) {
 	var m MatchTime
 	err := r.DB.QueryRowContext(ctx,
-		`SELECT match_time, status FROM matches WHERE id = $1`,
+		`SELECT match_time, status, is_knockout FROM matches WHERE id = $1`,
 		matchID,
-	).Scan(&m.MatchTime, &m.Status)
+	).Scan(&m.MatchTime, &m.Status, &m.IsKnockout)
 	if err != nil {
 		return nil, err
 	}
@@ -209,9 +210,9 @@ func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx
 		`WITH candidate AS (
 		    SELECT id
 		    FROM matches
-		    WHERE lower(home_team) = lower($7)
-		      AND lower(away_team) = lower($8)
-		      AND match_time = $9
+		    WHERE lower(home_team) = lower($8)
+		      AND lower(away_team) = lower($9)
+		      AND match_time = $10
 		      AND (
 		          thesportsdb_event_id IS NULL
 		          OR thesportsdb_event_id = $4
@@ -226,6 +227,7 @@ func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx
 		     thesportsdb_event_id = COALESCE(thesportsdb_event_id, $4),
 		     thesportsdb_home_team_id = COALESCE(thesportsdb_home_team_id, $5),
 		     thesportsdb_away_team_id = COALESCE(thesportsdb_away_team_id, $6),
+		     is_knockout = $7,
 		     updated_at = CURRENT_TIMESTAMP
 		 FROM candidate
 		 WHERE matches.id = candidate.id
@@ -236,6 +238,7 @@ func (r *MatchRepository) updateMatchingImported(ctx context.Context, tx *sql.Tx
 		m.TheSportsDBEventID,
 		m.TheSportsDBHomeID,
 		m.TheSportsDBAwayID,
+		m.IsKnockout,
 		m.HomeTeam,
 		m.AwayTeam,
 		m.MatchTime,

@@ -47,3 +47,60 @@ func TestParseIntRoundMapsKnockoutRounds(t *testing.T) {
 		})
 	}
 }
+
+func TestTheSportsDBStatusToInternalFinishedVariants(t *testing.T) {
+	t.Parallel()
+
+	// AET/AP são os status que o TheSportsDB usa em mata-mata após prorrogação/pênaltis.
+	// Antes caíam no default e viravam "scheduled", bloqueando pontuação e fechamento de rodada.
+	finished := []string{"FT", "ft", "AET", "aet", "AP", "ap", "PEN", "Match Finished"}
+	for _, st := range finished {
+		if got := theSportsDBStatusToInternal(st); got != "finished" {
+			t.Fatalf("theSportsDBStatusToInternal(%q) = %q, want finished", st, got)
+		}
+	}
+
+	ongoing := []string{"1H", "HT", "2H", "ET", "P", "Live"}
+	for _, st := range ongoing {
+		if got := theSportsDBStatusToInternal(st); got != "ongoing" {
+			t.Fatalf("theSportsDBStatusToInternal(%q) = %q, want ongoing", st, got)
+		}
+	}
+}
+
+func TestTheSportsDBAdvanceMethod(t *testing.T) {
+	t.Parallel()
+
+	if got := theSportsDBAdvanceMethod("AET"); got != "et" {
+		t.Fatalf("AET -> %q, want et", got)
+	}
+	if got := theSportsDBAdvanceMethod("AP"); got != "penalties" {
+		t.Fatalf("AP -> %q, want penalties", got)
+	}
+	if got := theSportsDBAdvanceMethod("FT"); got != "" {
+		t.Fatalf("FT -> %q, want empty", got)
+	}
+}
+
+func TestDeriveKnockoutWinner(t *testing.T) {
+	t.Parallel()
+
+	// Vitória regular / AET
+	if got := deriveKnockoutWinner(3, 2, nil, nil); got == nil || *got != "home" {
+		t.Fatalf("3-2 expected home, got %v", got)
+	}
+	if got := deriveKnockoutWinner(1, 2, nil, nil); got == nil || *got != "away" {
+		t.Fatalf("1-2 expected away, got %v", got)
+	}
+
+	// Empate + pênaltis (extras)
+	homePen, awayPen := 3, 4
+	if got := deriveKnockoutWinner(1, 1, &homePen, &awayPen); got == nil || *got != "away" {
+		t.Fatalf("1-1 (3-4 pen) expected away, got %v", got)
+	}
+
+	// Empate sem extras → desconhecido
+	if got := deriveKnockoutWinner(0, 0, nil, nil); got != nil {
+		t.Fatalf("0-0 without extras expected nil, got %v", *got)
+	}
+}
