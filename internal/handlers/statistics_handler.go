@@ -323,12 +323,15 @@ type bracketResponse struct {
 }
 
 type bracketMatchDTO struct {
-	ID        string         `json:"id"`
-	Home      bracketTeamDTO `json:"home"`
-	Away      bracketTeamDTO `json:"away"`
-	Status    string         `json:"status"`
-	MatchTime string         `json:"match_time"`
-	Slot      int            `json:"slot"`
+	ID            string         `json:"id"`
+	Home          bracketTeamDTO `json:"home"`
+	Away          bracketTeamDTO `json:"away"`
+	Status        string         `json:"status"`
+	MatchTime     string         `json:"match_time"`
+	Slot          int            `json:"slot"`
+	IsKnockout    bool           `json:"is_knockout,omitempty"`
+	WinnerTeam    *string        `json:"winner_team,omitempty"`
+	AdvanceMethod *string        `json:"advance_method,omitempty"`
 }
 
 type bracketTeamDTO struct {
@@ -338,23 +341,35 @@ type bracketTeamDTO struct {
 }
 
 var knockoutRoundMap = map[string]string{
-	"4":               "r32",
-	"5":               "r16",
-	"6":               "qf",
-	"7":               "sf",
-	"8":               "third",
-	"9":               "final",
-	"32":              "r32",
-	"round of 32":     "r32",
-	"16":              "r16",
-	"round of 16":     "r16",
+	"4":           "r32",
+	"5":           "r16",
+	"6":           "qf",
+	"7":           "sf",
+	"8":           "third",
+	"9":           "final",
+	"32":          "r32",
+	"round of 32": "r32",
+	"16":          "r16",
+	"round of 16": "r16",
+	// TheSportsDB Copa 2026: códigos numéricos não-sequenciais
+	"125": "qf",
+	"150": "sf",
+	// Códigos previstos para final / 3º (também classificados por times das semis)
+	"160":             "third",
+	"170":             "third",
+	"175":             "final",
+	"180":             "final",
+	"200":             "final",
 	"quarter-final":   "qf",
 	"quarter-finals":  "qf",
 	"quarterfinal":    "qf",
+	"quarterfinals":   "qf",
 	"semi-final":      "sf",
 	"semi-finals":     "sf",
 	"semifinal":       "sf",
+	"semifinals":      "sf",
 	"final":           "final",
+	"finals":          "final",
 	"3rd place final": "third",
 	"3rd place":       "third",
 	"third place":     "third",
@@ -367,6 +382,8 @@ var localKnockoutRoundMap = map[int]string{
 	7:   "sf",
 	8:   "third",
 	9:   "final",
+	16:  "r16",
+	32:  "r32",
 	100: "r32",
 	101: "r16",
 	102: "qf",
@@ -374,12 +391,20 @@ var localKnockoutRoundMap = map[int]string{
 	104: "third",
 	105: "final",
 	122: "r32",
+	125: "qf", // TheSportsDB WC 2026 (antes do remap)
+	150: "sf", // TheSportsDB WC 2026 (antes do remap)
+	160: "third",
+	170: "third",
+	175: "final",
+	180: "final",
+	200: "final",
 }
 
 const roundOf32MatchCount = 16
 
 func (h *StatisticsHandler) GetBracket(c *echo.Context) error {
-	return h.serveJSON(c, "bracket", 5*time.Minute, func() (any, error) {
+	// TTL curto: chaveamento muda a cada jogo finalizado
+	return h.serveJSON(c, "bracket", 2*time.Minute, func() (any, error) {
 		ctx := c.Request().Context()
 
 		roundOrder := []string{"r32", "r16", "qf", "sf", "final", "third"}
@@ -388,8 +413,10 @@ func (h *StatisticsHandler) GetBracket(c *echo.Context) error {
 			rounds[r] = []bracketMatchDTO{}
 		}
 
+		var scheduleEvents []services.TheSportsDBEvent
 		events, _, externalErr := h.sdb.ListLeagueSchedule(ctx, h.leagueID, h.season)
 		if externalErr == nil {
+			scheduleEvents = events
 			for _, ev := range events {
 				roundKey := normalizeRound(ev.Round)
 				if roundKey == "" {
@@ -409,10 +436,27 @@ func (h *StatisticsHandler) GetBracket(c *echo.Context) error {
 			for _, match := range localMatches {
 				roundKey := localKnockoutRoundMap[match.RoundNumber]
 				if roundKey == "" {
+					// tenta classificar final/3º por times das semis
+					roundKey = classifyKnockoutBySemis(localToBracketMatch(match), rounds["sf"])
+				}
+				if roundKey == "" {
 					continue
 				}
 				upsertBracketMatch(rounds, roundKey, localToBracketMatch(match))
 			}
+		}
+
+		// Eventos da API sem intRound conhecido (ex.: final ainda sem código mapeado)
+		for _, ev := range scheduleEvents {
+			if normalizeRound(ev.Round) != "" {
+				continue
+			}
+			bm := eventToBracketMatch(ev)
+			roundKey := classifyKnockoutBySemis(bm, rounds["sf"])
+			if roundKey == "" {
+				continue
+			}
+			upsertBracketMatch(rounds, roundKey, bm)
 		}
 
 		standings, standingsErr := h.sdb.LookupLeagueTable(ctx, h.leagueID, h.season)
@@ -424,12 +468,16 @@ func (h *StatisticsHandler) GetBracket(c *echo.Context) error {
 			}
 		}
 
-		// Atribui slots sequenciais por rodada
-		for key := range rounds {
-			for i := range rounds[key] {
-				rounds[key][i].Slot = i
-			}
-		}
+		// Reordena para o desenho do bracket (pares que se enfrentam na fase seguinte
+		// ficam em slots adjacentes). Ordem cronológica pura quebra o chaveamento.
+		orderKnockoutBracket(rounds)
+
+		// Preenche final / 3º a partir das semis quando a API ainda não publicou o jogo
+		fillFinalAndThirdFromSemis(rounds)
+		// Preferir jogos reais a placeholders sintéticos
+		rounds["final"] = preferRealBracketMatches(rounds["final"])
+		rounds["third"] = preferRealBracketMatches(rounds["third"])
+		assignBracketSlots(rounds)
 
 		return bracketResponse{Rounds: rounds}, nil
 	})
@@ -438,22 +486,46 @@ func (h *StatisticsHandler) GetBracket(c *echo.Context) error {
 func eventToBracketMatch(ev services.TheSportsDBEvent) bracketMatchDTO {
 	var homeScore, awayScore *int
 	if ev.HomeScore != nil {
-		if v, err := strconv.Atoi(*ev.HomeScore); err == nil {
+		if v, err := strconv.Atoi(strings.TrimSpace(*ev.HomeScore)); err == nil {
 			homeScore = &v
 		}
 	}
 	if ev.AwayScore != nil {
-		if v, err := strconv.Atoi(*ev.AwayScore); err == nil {
+		if v, err := strconv.Atoi(strings.TrimSpace(*ev.AwayScore)); err == nil {
 			awayScore = &v
 		}
 	}
 
 	status := "scheduled"
-	switch ev.Status {
-	case "Match Finished":
+	switch strings.ToLower(strings.TrimSpace(ev.Status)) {
+	case "ft", "aet", "ap", "pen", "aft", "finished", "match finished":
 		status = "finished"
-	case "In Progress", "HT":
+	case "1h", "ht", "2h", "et", "p", "live", "susp", "in progress", "inplay", "in play":
 		status = "ongoing"
+	}
+
+	advance := ""
+	switch strings.ToLower(strings.TrimSpace(ev.Status)) {
+	case "aet", "et":
+		advance = "et"
+	case "ap", "p", "pen":
+		advance = "penalties"
+	}
+	var advancePtr *string
+	if advance != "" {
+		advancePtr = &advance
+	}
+
+	var winnerPtr *string
+	if status == "finished" && homeScore != nil && awayScore != nil {
+		if *homeScore > *awayScore {
+			w := "home"
+			winnerPtr = &w
+		} else if *awayScore > *homeScore {
+			w := "away"
+			winnerPtr = &w
+		}
+		// Empate (AP): vencedor vem do banco local no merge, se disponível
 	}
 
 	return bracketMatchDTO{
@@ -468,8 +540,11 @@ func eventToBracketMatch(ev services.TheSportsDBEvent) bracketMatchDTO {
 			Badge: ev.AwayBadge,
 			Score: awayScore,
 		},
-		Status:    status,
-		MatchTime: ev.Timestamp,
+		Status:        status,
+		MatchTime:     ev.Timestamp,
+		IsKnockout:    true,
+		WinnerTeam:    winnerPtr,
+		AdvanceMethod: advancePtr,
 	}
 }
 
@@ -489,8 +564,11 @@ func localToBracketMatch(match repositories.LocalBracketMatch) bracketMatchDTO {
 			Name:  match.AwayTeam,
 			Score: match.AwayScore,
 		},
-		Status:    match.Status,
-		MatchTime: match.MatchTime.UTC().Format(time.RFC3339),
+		Status:        match.Status,
+		MatchTime:     match.MatchTime.UTC().Format(time.RFC3339),
+		IsKnockout:    true,
+		WinnerTeam:    match.WinnerTeam,
+		AdvanceMethod: match.AdvanceMethod,
 	}
 }
 
@@ -521,7 +599,352 @@ func mergeBracketMatch(existing, incoming bracketMatchDTO) bracketMatchDTO {
 	if incoming.Away.Badge == "" {
 		incoming.Away.Badge = existing.Away.Badge
 	}
+	if incoming.Home.Score == nil {
+		incoming.Home.Score = existing.Home.Score
+	}
+	if incoming.Away.Score == nil {
+		incoming.Away.Score = existing.Away.Score
+	}
+	if incoming.WinnerTeam == nil {
+		incoming.WinnerTeam = existing.WinnerTeam
+	}
+	if incoming.AdvanceMethod == nil {
+		incoming.AdvanceMethod = existing.AdvanceMethod
+	}
+	// Preferir status mais "avançado"
+	if statusRank(existing.Status) > statusRank(incoming.Status) {
+		incoming.Status = existing.Status
+	}
+	if incoming.MatchTime == "" {
+		incoming.MatchTime = existing.MatchTime
+	}
 	return incoming
+}
+
+func statusRank(status string) int {
+	switch status {
+	case "finished":
+		return 3
+	case "ongoing":
+		return 2
+	case "scheduled":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// orderKnockoutBracket reordena as fases para o desenho do chaveamento:
+// jogos cujos vencedores se enfrentam na fase seguinte ficam em slots adjacentes
+// (0–1 → slot 0 da próxima, 2–3 → slot 1, …).
+func orderKnockoutBracket(rounds map[string][]bracketMatchDTO) {
+	// Baseline: ordem temporal estável
+	for key := range rounds {
+		sort.SliceStable(rounds[key], func(i, j int) bool {
+			ti, tj := rounds[key][i].MatchTime, rounds[key][j].MatchTime
+			if ti != tj {
+				return ti < tj
+			}
+			return rounds[key][i].ID < rounds[key][j].ID
+		})
+	}
+
+	// De trás para frente: final → sf → qf → r16 → r32
+	chain := []string{"final", "sf", "qf", "r16", "r32"}
+	for i := 0; i < len(chain)-1; i++ {
+		nextKey, prevKey := chain[i], chain[i+1]
+		if len(rounds[nextKey]) == 0 || len(rounds[prevKey]) == 0 {
+			continue
+		}
+		rounds[prevKey] = orderPreviousRoundByNext(rounds[prevKey], rounds[nextKey])
+	}
+
+	assignBracketSlots(rounds)
+}
+
+func assignBracketSlots(rounds map[string][]bracketMatchDTO) {
+	for key := range rounds {
+		for i := range rounds[key] {
+			rounds[key][i].Slot = i
+		}
+	}
+}
+
+// classifyKnockoutBySemis identifica final ou 3º lugar quando o intRound da API
+// não está mapeado, comparando as equipes com vencedores/perdedores das semis.
+func classifyKnockoutBySemis(match bracketMatchDTO, semis []bracketMatchDTO) string {
+	if len(semis) == 0 {
+		return ""
+	}
+	home := normalizeTeamName(match.Home.Name)
+	away := normalizeTeamName(match.Away.Name)
+	if home == "" || away == "" {
+		return ""
+	}
+
+	winners := map[string]bool{}
+	losers := map[string]bool{}
+	sfTeams := map[string]bool{}
+	for _, sf := range semis {
+		sfTeams[normalizeTeamName(sf.Home.Name)] = true
+		sfTeams[normalizeTeamName(sf.Away.Name)] = true
+		if w := normalizeTeamName(bracketWinnerName(sf)); w != "" {
+			winners[w] = true
+		}
+		if l := normalizeTeamName(bracketLoserName(sf)); l != "" {
+			losers[l] = true
+		}
+	}
+
+	// Ambos finalistas conhecidos
+	if winners[home] && winners[away] {
+		return "final"
+	}
+	// Ambos perdedores das semis → 3º lugar
+	if losers[home] && losers[away] {
+		return "third"
+	}
+	// Um finalista + time ainda em semi em andamento (ou placeholder)
+	if (winners[home] || winners[away]) && (sfTeams[home] || sfTeams[away]) {
+		// evita classificar um jogo de semi de novo
+		if isSameFixture(match, semis) {
+			return ""
+		}
+		return "final"
+	}
+	return ""
+}
+
+func isSameFixture(match bracketMatchDTO, pool []bracketMatchDTO) bool {
+	h, a := normalizeTeamName(match.Home.Name), normalizeTeamName(match.Away.Name)
+	for _, m := range pool {
+		mh, ma := normalizeTeamName(m.Home.Name), normalizeTeamName(m.Away.Name)
+		if (mh == h && ma == a) || (mh == a && ma == h) {
+			return true
+		}
+	}
+	return false
+}
+
+func bracketWinnerName(m bracketMatchDTO) string {
+	if m.WinnerTeam != nil {
+		switch *m.WinnerTeam {
+		case "home":
+			return strings.TrimSpace(m.Home.Name)
+		case "away":
+			return strings.TrimSpace(m.Away.Name)
+		}
+	}
+	if m.Status != "finished" {
+		return ""
+	}
+	if m.Home.Score != nil && m.Away.Score != nil {
+		if *m.Home.Score > *m.Away.Score {
+			return strings.TrimSpace(m.Home.Name)
+		}
+		if *m.Away.Score > *m.Home.Score {
+			return strings.TrimSpace(m.Away.Name)
+		}
+	}
+	return ""
+}
+
+func bracketLoserName(m bracketMatchDTO) string {
+	w := bracketWinnerName(m)
+	if w == "" {
+		return ""
+	}
+	if normalizeTeamName(w) == normalizeTeamName(m.Home.Name) {
+		return strings.TrimSpace(m.Away.Name)
+	}
+	return strings.TrimSpace(m.Home.Name)
+}
+
+// fillFinalAndThirdFromSemis cria/atualiza final e 3º lugar com base nas semis
+// quando o TheSportsDB ainda não publicou esses jogos.
+func fillFinalAndThirdFromSemis(rounds map[string][]bracketMatchDTO) {
+	sf := rounds["sf"]
+	if len(sf) == 0 {
+		return
+	}
+
+	var winners, losers []string
+	var pendingSF *bracketMatchDTO
+	for i := range sf {
+		m := sf[i]
+		if w := bracketWinnerName(m); w != "" {
+			winners = append(winners, w)
+			if l := bracketLoserName(m); l != "" {
+				losers = append(losers, l)
+			}
+			continue
+		}
+		// Semi ainda sem vencedor: placeholder para a final
+		cp := m
+		pendingSF = &cp
+	}
+
+	// Final: preenche times conhecidos (e placeholder se faltar uma semi)
+	homeName, awayName := "", ""
+	if len(winners) >= 1 {
+		homeName = winners[0]
+	}
+	if len(winners) >= 2 {
+		awayName = winners[1]
+	} else if pendingSF != nil {
+		awayName = fmt.Sprintf(
+			"Vencedor %s/%s",
+			strings.TrimSpace(pendingSF.Home.Name),
+			strings.TrimSpace(pendingSF.Away.Name),
+		)
+	}
+
+	if homeName != "" || awayName != "" {
+		applyDerivedMatch(rounds, "final", "synthetic-final", homeName, awayName, len(winners) >= 2)
+	}
+
+	// 3º lugar só com ambos perdedores conhecidos
+	if len(losers) >= 2 {
+		applyDerivedMatch(rounds, "third", "synthetic-third", losers[0], losers[1], true)
+	}
+}
+
+func applyDerivedMatch(
+	rounds map[string][]bracketMatchDTO,
+	roundKey, syntheticID, homeName, awayName string,
+	bothKnown bool,
+) {
+	existing := rounds[roundKey]
+	// Se já existe jogo real (não sintético) com placar/status avançado, só completa nomes vazios
+	for i := range existing {
+		m := &existing[i]
+		if strings.HasPrefix(m.ID, "synthetic-") {
+			continue
+		}
+		if strings.TrimSpace(m.Home.Name) == "" && homeName != "" {
+			m.Home.Name = homeName
+		}
+		if strings.TrimSpace(m.Away.Name) == "" && awayName != "" {
+			m.Away.Name = awayName
+		}
+		rounds[roundKey] = existing
+		return
+	}
+
+	// Atualiza sintético existente ou cria um novo
+	for i := range existing {
+		if existing[i].ID == syntheticID || strings.HasPrefix(existing[i].ID, "synthetic-") {
+			if homeName != "" {
+				existing[i].Home.Name = homeName
+			}
+			if awayName != "" {
+				existing[i].Away.Name = awayName
+			}
+			existing[i].IsKnockout = true
+			if bothKnown {
+				existing[i].Status = "scheduled"
+			}
+			rounds[roundKey] = existing
+			return
+		}
+	}
+
+	status := "scheduled"
+	if !bothKnown {
+		status = "scheduled"
+	}
+	rounds[roundKey] = append(rounds[roundKey], bracketMatchDTO{
+		ID: syntheticID,
+		Home: bracketTeamDTO{
+			Name: homeName,
+		},
+		Away: bracketTeamDTO{
+			Name: awayName,
+		},
+		Status:     status,
+		IsKnockout: true,
+		Slot:       0,
+	})
+}
+
+func preferRealBracketMatches(matches []bracketMatchDTO) []bracketMatchDTO {
+	if len(matches) <= 1 {
+		return matches
+	}
+	var real, synthetic []bracketMatchDTO
+	for _, m := range matches {
+		if strings.HasPrefix(m.ID, "synthetic-") {
+			synthetic = append(synthetic, m)
+		} else {
+			real = append(real, m)
+		}
+	}
+	if len(real) > 0 {
+		return real
+	}
+	return synthetic
+}
+
+// orderPreviousRoundByNext coloca, para cada jogo da fase seguinte, os dois jogos
+// anteriores que contêm as equipes daquele confronto (na ordem home/away).
+func orderPreviousRoundByNext(prev, next []bracketMatchDTO) []bracketMatchDTO {
+	used := make(map[string]bool, len(prev))
+	ordered := make([]bracketMatchDTO, 0, len(prev))
+
+	for _, nextMatch := range next {
+		for _, src := range sourceMatchesForNext(prev, nextMatch) {
+			if used[src.ID] {
+				continue
+			}
+			ordered = append(ordered, src)
+			used[src.ID] = true
+		}
+	}
+
+	for _, m := range prev {
+		if used[m.ID] {
+			continue
+		}
+		ordered = append(ordered, m)
+	}
+	return ordered
+}
+
+// sourceMatchesForNext encontra os jogos da fase anterior que alimentam o confronto.
+func sourceMatchesForNext(prev []bracketMatchDTO, next bracketMatchDTO) []bracketMatchDTO {
+	nextHome := normalizeTeamName(next.Home.Name)
+	nextAway := normalizeTeamName(next.Away.Name)
+	if nextHome == "" && nextAway == "" {
+		return nil
+	}
+
+	var homeSrc, awaySrc *bracketMatchDTO
+	for i := range prev {
+		m := &prev[i]
+		if nextHome != "" && teamInBracketMatch(*m, nextHome) {
+			homeSrc = m
+		}
+		if nextAway != "" && teamInBracketMatch(*m, nextAway) {
+			awaySrc = m
+		}
+	}
+
+	out := make([]bracketMatchDTO, 0, 2)
+	if homeSrc != nil {
+		out = append(out, *homeSrc)
+	}
+	if awaySrc != nil && (homeSrc == nil || awaySrc.ID != homeSrc.ID) {
+		out = append(out, *awaySrc)
+	}
+	return out
+}
+
+func teamInBracketMatch(m bracketMatchDTO, normalizedTeam string) bool {
+	if normalizedTeam == "" {
+		return false
+	}
+	return normalizeTeamName(m.Home.Name) == normalizedTeam ||
+		normalizeTeamName(m.Away.Name) == normalizedTeam
 }
 
 func deriveQualifiedRoundOf32Entries(

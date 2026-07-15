@@ -233,11 +233,20 @@ func parseIntRound(raw string) int {
 		return n
 	}
 	// Rounds de mata-mata podem vir como tamanho da fase no TheSportsDB.
+	// Na Copa 2026 a API também usa 125 (quartas) e 150 (semis).
 	switch n {
 	case 32:
 		return 100 // Fase de 32
 	case 16:
 		return 101 // Oitavas
+	case 125:
+		return 102 // Quartas (TheSportsDB WC 2026)
+	case 150:
+		return 103 // Semifinal (TheSportsDB WC 2026)
+	case 160, 170:
+		return 104 // 3º lugar (códigos previstos)
+	case 175, 180, 200:
+		return 105 // Final (códigos previstos)
 	case 4:
 		return 100 // Compatibilidade com payloads antigos
 	case 5:

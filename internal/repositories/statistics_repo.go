@@ -251,16 +251,24 @@ type LocalBracketMatch struct {
 	Status             string
 	MatchTime          time.Time
 	TheSportsDBEventID *string
+	IsKnockout         bool
+	WinnerTeam         *string
+	AdvanceMethod      *string
 }
 
 func (r *StatisticsRepository) ListLocalBracketMatches(ctx context.Context) ([]LocalBracketMatch, error) {
+	// Inclui rodadas internas (100–105), legadas (4–9), placeholders (122)
+	// e códigos crus do TheSportsDB 2026 (32/16/125/150) se ainda não remapeados.
 	rows, err := r.DB.QueryContext(ctx,
 		`SELECT m.id, r.number, m.home_team, m.away_team,
 		        m.home_score, m.away_score, m.status, m.match_time,
-		        m.thesportsdb_event_id
+		        m.thesportsdb_event_id, m.is_knockout, m.winner_team, m.advance_method
 		 FROM matches m
 		 JOIN rounds r ON r.id = m.round_id
-		 WHERE r.number BETWEEN 100 AND 105 OR r.number BETWEEN 4 AND 9 OR r.number = 122
+		 WHERE r.number BETWEEN 4 AND 9
+		    OR r.number BETWEEN 16 AND 32
+		    OR r.number BETWEEN 100 AND 200
+		    OR r.number IN (122, 125, 150)
 		 ORDER BY r.number ASC, m.match_time ASC, m.id ASC`,
 	)
 	if err != nil {
@@ -272,7 +280,7 @@ func (r *StatisticsRepository) ListLocalBracketMatches(ctx context.Context) ([]L
 	for rows.Next() {
 		var m LocalBracketMatch
 		var homeScore, awayScore sql.NullInt32
-		var eventID sql.NullString
+		var eventID, winnerTeam, advanceMethod sql.NullString
 		if err := rows.Scan(
 			&m.ID,
 			&m.RoundNumber,
@@ -283,6 +291,9 @@ func (r *StatisticsRepository) ListLocalBracketMatches(ctx context.Context) ([]L
 			&m.Status,
 			&m.MatchTime,
 			&eventID,
+			&m.IsKnockout,
+			&winnerTeam,
+			&advanceMethod,
 		); err != nil {
 			return nil, err
 		}
@@ -297,6 +308,14 @@ func (r *StatisticsRepository) ListLocalBracketMatches(ctx context.Context) ([]L
 		if eventID.Valid && eventID.String != "" {
 			value := eventID.String
 			m.TheSportsDBEventID = &value
+		}
+		if winnerTeam.Valid && winnerTeam.String != "" {
+			v := winnerTeam.String
+			m.WinnerTeam = &v
+		}
+		if advanceMethod.Valid && advanceMethod.String != "" {
+			v := advanceMethod.String
+			m.AdvanceMethod = &v
 		}
 		matches = append(matches, m)
 	}
